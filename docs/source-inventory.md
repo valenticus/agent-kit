@@ -19,4 +19,4 @@ Inventory derived from the source repository before extraction.
 
 The eight Cline copies were verified identical to their `.agents` counterparts. Vendor skills were intentionally not mirrored. Product names, financial rules, tables/RPCs, brand tokens, components, locale details, and screen names were excluded from active universal behavior and replaced with project hooks.
 
-In Agent Kit v1.0.0, Supabase/Postgres and Web Design are optional vendored modules with preserved MIT notices; Vercel React Best Practices is an optional referenced module because its inspected distribution declared MIT without including a complete license notice. None is part of the default core installation.
+In Agent Kit v1.1.0, Supabase/Postgres and Web Design are optional vendored modules with preserved MIT notices; Vercel React Best Practices is an optional referenced module because its inspected distribution declared MIT without including a complete license notice. None is part of the default core installation.

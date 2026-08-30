@@ -1,6 +1,6 @@
 ---
 name: ui
-description: Implement or review visual, responsive, accessibility, and interaction work using the current project's own design language. Do not use for backend-only work.
+description: Implement visual, responsive, accessibility, or interaction changes using the current project's design language. Do not use for backend-only work or standalone design critique.
 ---
 
 # UI

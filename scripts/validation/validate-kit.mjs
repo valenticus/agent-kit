@@ -41,7 +41,7 @@ for (const name of expectedOptional) {
 const required = ['README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
-if (version !== '1.0.0') errors.push(`unexpected VERSION ${version}`);
+if (version !== '1.1.0') errors.push(`unexpected VERSION ${version}`);
 for (const agent of ['designer','coding','reviewer']) {
   const text = await readFile(path.join(root, 'agents', agent, 'agent.md'), 'utf8');
   if (!/^---\r?\ndescription:\s*\S/m.test(text) || !/\r?\nmode:\s*primary\r?\n/.test(text)) errors.push(`${agent}: invalid agent frontmatter`);

@@ -1,6 +1,6 @@
 ---
 name: debugging
-description: Diagnose and fix a reproducible defect or regression across UI, state, data flow, APIs, and persistence. Do not use for new features or generic cleanup.
+description: Find and fix the root cause of a reproducible defect or regression. Do not use for new features, routine implementation, or generic cleanup.
 ---
 
 # Debugging
