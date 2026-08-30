@@ -1,0 +1,2 @@
+# Preserve vendored third-party packages byte-for-byte; validate their source hashes and licenses separately.
+optional/vendored/** -whitespace

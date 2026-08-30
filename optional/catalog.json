@@ -1,0 +1,15 @@
+{
+  "supabase-postgres-best-practices": {
+    "kind": "vendored", "version": "1.1.1", "path": "optional/vendored/supabase-postgres-best-practices", "license": "MIT", "licenseFile": "optional/vendored/supabase-postgres-best-practices/LICENSE", "upstream": "https://github.com/supabase/agent-skills",
+    "recommendWhen": "The project uses PostgreSQL or Supabase, or the task changes or diagnoses SQL, schema, migrations, RLS, database functions, locking, or database performance."
+  },
+  "vercel-react-best-practices": {
+    "kind": "referenced", "version": "1.0.0", "license": "MIT (declared upstream; complete license notice was absent from the inspected package)", "upstream": "https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices",
+    "installHint": "Use the maintained vercel:react-best-practices plugin skill when available, or install vercel-labs/agent-skills@vercel-react-best-practices with the user's approval.",
+    "recommendWhen": "The project uses React or Next.js and the task involves components, rendering, data fetching, bundles, or performance."
+  },
+  "web-design-guidelines": {
+    "kind": "vendored", "version": "1.0.0", "path": "optional/vendored/web-design-guidelines", "license": "MIT", "licenseFile": "optional/vendored/web-design-guidelines/references/LICENSE", "upstream": "https://github.com/vercel-labs/web-interface-guidelines/tree/e3d624baaf29dc1fc645aff3e38f03e564d2d6b1",
+    "recommendWhen": "The project has a web UI and the user asks for an interface, UX, accessibility, or design-guideline review."
+  }
+}

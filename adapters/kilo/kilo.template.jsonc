@@ -1,0 +1,14 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "permission": {
+    "read": { "*": "allow", ".env": "ask", ".env.*": "ask", "*.env": "ask", "*.env.*": "ask", ".env.example": "allow", "*.env.example": "allow" },
+    "edit": "allow",
+    "skill": "allow",
+    "bash": { "*": "ask", "git status*": "allow", "git diff*": "allow" },
+    "external_directory": "ask",
+    "webfetch": "ask",
+    "websearch": "ask",
+    "task": "ask"
+  },
+  "snapshot": false
+}
