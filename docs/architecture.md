@@ -20,6 +20,6 @@ The kit has no model lock. Agent model choice belongs to environment/project con
 
 ## Instruction ownership and loading
 
-Root project instructions own routing, precedence, permissions, context-loading policy, and always-on repository constraints. Each reusable workflow rule has one canonical skill owner; companion skills point to that owner and add only task-local consequences. This avoids maintaining the same checklist in several skills.
+Root project instructions own routing, precedence, permissions, context-loading policy, the default user-facing communication language, and other always-on repository constraints. Each reusable workflow rule has one canonical skill owner; companion skills point to that owner and add only task-local consequences. This avoids maintaining the same checklist in several skills.
 
 Context loads progressively from root instructions to one primary skill, any justified risk companion, the nearest relevant project/module documentation, and task-required references. Projects may name exceptional authoritative documents, but should not preload a documentation tree or maintain an exhaustive context map.

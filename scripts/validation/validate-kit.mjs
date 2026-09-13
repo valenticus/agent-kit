@@ -38,10 +38,12 @@ for (const name of expectedOptional) {
     if (!/MIT License/.test(license) || !/Copyright/.test(license)) errors.push(`${name}: incomplete license notice`);
   } else if (!module.installHint) errors.push(`${name}: referenced module lacks installHint`);
 }
-const required = ['README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs'];
+const required = ['README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
-if (version !== '1.2.0') errors.push(`unexpected VERSION ${version}`);
+if (version !== '1.2.1') errors.push(`unexpected VERSION ${version}`);
+const projectRules = await readFile(path.join(root, 'templates', 'project-rules', 'AGENTS.md'), 'utf8');
+if (!/## Communication language\r?\n[\s\S]*Respond to the user in Ukrainian by default\./.test(projectRules)) errors.push('project rules lack the canonical communication-language policy');
 for (const agent of ['designer','coding','reviewer']) {
   const text = await readFile(path.join(root, 'agents', agent, 'agent.md'), 'utf8');
   if (!/^---\r?\ndescription:\s*\S/m.test(text) || !/\r?\nmode:\s*primary\r?\n/.test(text)) errors.push(`${agent}: invalid agent frontmatter`);
