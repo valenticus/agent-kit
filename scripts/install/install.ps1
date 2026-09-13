@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory=$true)][string]$ProjectRoot,
   [string[]]$Tools = @('codex'),
   [string[]]$Skills = @('safe-change','debugging','final-audit','product-ux','mobile-design','design-critique','security','ui'),
-  [string[]]$OptionalSkills = @()
+  [string[]]$OptionalSkills = @(),
+  [switch]$CopilotAuditor
 )
 $ErrorActionPreference = 'Stop'
 $kitRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
@@ -10,10 +11,10 @@ $project = Resolve-Path $ProjectRoot
 $Tools = @($Tools | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $Skills = @($Skills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $OptionalSkills = @($OptionalSkills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-$allowedTools = @('codex','cline','kilo')
+$allowedTools = @('codex','cline','kilo','copilot')
 foreach ($tool in $Tools) { if ($tool -notin $allowedTools) { throw "Unknown tool: $tool" } }
 function Install-Skill([string]$skill, [string]$source) {
-  if ('codex' -in $Tools -or 'kilo' -in $Tools) {
+  if (@('codex','kilo','copilot') | Where-Object { $_ -in $Tools }) {
     $destination = Join-Path $project ".agents\skills\$skill"
     if (Test-Path -LiteralPath $destination) { throw "Refusing to overwrite $destination" }
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
@@ -24,6 +25,20 @@ function Install-Skill([string]$skill, [string]$source) {
     if (Test-Path -LiteralPath $destination) { throw "Refusing to overwrite $destination" }
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -Recurse -LiteralPath $source -Destination $destination
+  }
+}
+
+if ($CopilotAuditor -and 'copilot' -notin $Tools) { throw '-CopilotAuditor requires copilot in -Tools' }
+if ('copilot' -in $Tools) {
+  $instructionsDestination = Join-Path $project '.github\copilot-instructions.md'
+  if (Test-Path -LiteralPath $instructionsDestination) { throw ('Refusing to overwrite ' + $instructionsDestination) }
+  New-Item -ItemType Directory -Force -Path (Split-Path $instructionsDestination) | Out-Null
+  Copy-Item -LiteralPath (Join-Path $kitRoot 'adapters\copilot\copilot-instructions.md') -Destination $instructionsDestination
+  if ($CopilotAuditor) {
+    $auditorDestination = Join-Path $project '.github\agents\project-auditor.agent.md'
+    if (Test-Path -LiteralPath $auditorDestination) { throw ('Refusing to overwrite ' + $auditorDestination) }
+    New-Item -ItemType Directory -Force -Path (Split-Path $auditorDestination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $kitRoot 'adapters\copilot\project-auditor.agent.md') -Destination $auditorDestination
   }
 }
 
