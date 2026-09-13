@@ -8,11 +8,23 @@ Discover context nearest-first: this file, the primary skill, any mandatory just
 
 Canonical workflow owners are `safe-change` for minimal scope and proportional verification, `debugging` for reproduction and root-cause tracing, `security` for authority and data-integrity boundaries, `ui` for visual implementation and accessibility, and `final-audit` for broad release/readiness review. Other skills contain only local consequences and pointers to these owners, not copies of their general checklists.
 
+## Agent routing baseline
+
+Choose Codex, Cline, Kilo, or Copilot based on scope, complexity, dependencies, risk, validated capability, and available allowance. Agent selection remains separate from skill routing. Project-specific instructions may narrow or override this baseline.
+
+- Use Codex for complex, high-risk, architecture, backend, security, or refactor-heavy work.
+- Use Cline for medium-scope implementation and focused multi-file changes.
+- Use Kilo for small, localized, low-risk work and validated tool-specific roles.
+- Use Copilot primarily for independent repository audits and second-opinion reviews when its allowance is available.
+- Copilot is validated for evidence-based read-only audits, including running non-mutating tests and lint checks when permitted by the project.
+- Copilot may receive explicitly assigned experimental implementation tasks only when they are small, localized, reversible, and low risk. Require a clean starting state, minimal diff, relevant tests/checks, and final diff review. Do not use this experimental scope for architecture, security, authentication, authorization, database/RLS/migrations, sensitive data flows, broad refactors, dependency changes, deployment, or unattended commit/push. Expand Copilot's implementation role only after controlled coding tests justify an explicit routing update.
+
 - Project purpose and scope:
 - Instruction source-of-truth hierarchy:
 - Stack/directory summary:
 - Change discipline and user-owned work policy:
 - Required skill routing:
+- Agent routing overrides or restrictions:
 - Verification commands:
 - Git, dependency, external-action, and destructive-action permissions:
 - Exceptional authoritative documentation pointers, if any:

@@ -1,6 +1,6 @@
 # Universal Agent Kit
 
-Reusable, project-neutral agent methodology for Codex, Cline, and Kilo. The kit separates original universal methodology, optional stack/vendor modules, and project-owned skills.
+Reusable, project-neutral agent methodology for Codex, Cline, Kilo, and Copilot. The kit separates original universal methodology, optional stack/vendor modules, and project-owned skills.
 
 > Previous projects are methodology references only, never visual or product templates.
 
