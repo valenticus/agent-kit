@@ -10,12 +10,14 @@ New projects must define their own UI, product, architecture, data, security, an
 
 1. Open the target project and inspect existing agent files and working-tree changes.
 2. Copy `templates/bootstrap-prompt.md` into a Codex request and replace the placeholders.
-3. Let Codex propose relevant core skills, optional stack/vendor skills, and project hooks separately; the user/project setup decides what to install.
+3. Let Codex propose relevant core skills, opt-in core capabilities, optional stack/vendor skills, and project hooks separately; the user/project setup decides what to install. `data-visualization` is an opt-in core skill for chart selection, analytical encoding, visualization composition, interaction, responsive transformation, and truthfulness review.
 4. Run `powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/install.ps1 -ProjectRoot <project> -Tools codex,cline,kilo,copilot -Skills safe-change,debugging -OptionalSkills web-design-guidelines` with only the approved selections. Add `-CopilotAuditor` only when the optional read-only Copilot audit profile is wanted. The process-scoped execution-policy flag is useful on Windows hosts that block local scripts; it does not change the machine policy.
 5. Complete the generated project hooks and merge them into the project's instruction system.
 6. Run `node <kit>/scripts/validation/validate-kit.mjs`, `node <kit>/scripts/validation/validate-installer.mjs`, and `node <kit>/scripts/validation/validate-install.mjs <project>`.
 
 Installation is an explicit, one-shot operation. It does not start agents, loops, commits, dependency installation, or synchronization.
+
+The default `-Skills` selection stays compact. Install `data-visualization` explicitly with `-Skills data-visualization` or include it in a comma-separated core skill selection when visualization decisions are material.
 
 ## Canonical source-of-truth model
 

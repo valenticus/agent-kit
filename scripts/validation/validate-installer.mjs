@@ -23,8 +23,8 @@ async function exists(file) {
   try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-async function runInstall(project, tools, extra = []) {
-  return execFileAsync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, '-Tools', tools.join(','), '-Skills', 'safe-change', ...extra]);
+async function runInstall(project, tools, extra = [], skills = 'safe-change') {
+  return execFileAsync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, '-Tools', tools.join(','), '-Skills', skills, ...extra]);
 }
 
 try {
@@ -78,7 +78,19 @@ try {
   try { await runInstall(invalidAuditorProject, ['codex'], ['-CopilotAuditor']); } catch { rejectedInvalidAuditor = true; }
   if (!rejectedInvalidAuditor) throw new Error('Copilot auditor accepted without the Copilot tool');
 
-  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, and optional auditor behavior.`);
+  const visualizationProject = path.join(workspace, 'data-visualization');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(visualizationProject));
+  await runInstall(visualizationProject, ['codex', 'cline', 'kilo', 'copilot'], [], 'data-visualization');
+  await execFileAsync(process.execPath, [installValidator, visualizationProject]);
+  const canonicalVisualization = path.join(root, 'core', 'skills', 'data-visualization');
+  for (const relative of ['SKILL.md', 'references/accessibility.md', 'references/chart-selection.md', 'references/responsive-interaction.md', 'references/validation-and-anti-patterns.md', 'references/visual-composition.md', 'references/visual-encoding.md']) {
+    const canonical = await readFile(path.join(canonicalVisualization, relative));
+    const shared = await readFile(path.join(visualizationProject, '.agents', 'skills', 'data-visualization', relative));
+    const clineMirror = await readFile(path.join(visualizationProject, '.cline', 'skills', 'data-visualization', relative));
+    if (!canonical.equals(shared) || !shared.equals(clineMirror)) throw new Error(`data-visualization/${relative}: installed copies differ from canonical source`);
+  }
+
+  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, and opt-in data-visualization distribution.`);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

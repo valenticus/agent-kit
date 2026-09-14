@@ -1,6 +1,6 @@
 # Architecture and discovery
 
-`core/skills` is canonical for original universal methodology. `optional/vendored` is canonical for redistributable stack/vendor packages, while `optional/catalog.json` records both vendored and referenced modules. Tool adapters materialize approved selections into a project. Project hooks remain project-owned and are never synchronized back automatically.
+`core/skills` is canonical for original universal methodology, including opt-in capabilities that are not part of the installer's default selection. `optional/vendored` is canonical for redistributable third-party stack/vendor packages, while `optional/catalog.json` records both vendored and referenced third-party modules. Tool adapters materialize approved selections into a project. Project hooks remain project-owned and are never synchronized back automatically.
 
 ```text
 Agent Kit canonical source
@@ -20,6 +20,8 @@ The kit has no model lock. Agent model choice belongs to environment/project con
 
 ## Instruction ownership and loading
 
-Root project instructions own routing, precedence, permissions, context-loading policy, the default user-facing communication language, and other always-on repository constraints. Each reusable workflow rule has one canonical skill owner; companion skills point to that owner and add only task-local consequences. This avoids maintaining the same checklist in several skills.
+Each repository's root instructions own routing, precedence, permissions, context-loading policy, the default user-facing communication language, and other always-on constraints. Agent Kit's root `AGENTS.md` governs development of this repository; `templates/project-rules/AGENTS.md` is the canonical starting point merged or adapted into consumer-project root instructions. Each reusable workflow rule has one canonical skill owner; companion skills point to that owner and add only task-local consequences. This avoids maintaining the same checklist in several skills.
 
 Context loads progressively from root instructions to one primary skill, any justified risk companion, the nearest relevant project/module documentation, and task-required references. Projects may name exceptional authoritative documents, but should not preload a documentation tree or maintain an exhaustive context map.
+
+`data-visualization` is an opt-in core skill and is normally primary when the essential problem is chart choice, analytical encoding, truthful comparison, visualization composition, or chart-specific interaction/responsive behavior. `ui` remains primary when those decisions are settled and the task is chiefly component styling or integration. They are companions only when both boundaries are independently material.
