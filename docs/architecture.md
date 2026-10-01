@@ -6,6 +6,7 @@
 Agent Kit canonical source
   -> project .agents/skills -> Codex / Kilo / Copilot
   -> validated project .cline/skills mirror -> Cline
+  -> generated, git-ignored project .claude/skills link to .agents/skills -> Claude Code (opt-in)
 ```
 
 Codex uses root `AGENTS.md` plus `.agents/skills`. Cline uses generated `.cline/skills` mirrors and can share root instructions through a small import file. Core and vendored optional selections follow the same canonical-to-mirror path.
@@ -15,6 +16,8 @@ Kilo keeps native permissions and custom-agent frontmatter in `.kilo`, while con
 Copilot uses the root or nearest `AGENTS.md`, a small repository-wide `.github/copilot-instructions.md` bridge, and the same `.agents/skills` materialization as Codex and Kilo. The bridge does not duplicate canonical policy because Copilot gives repository-wide instructions precedence over agent instructions; it points back to `AGENTS.md` and the progressive skill-loading contract without redefining them. The optional `.github/agents/project-auditor.agent.md` profile is installed only on request and never runs automatically. No `.github/skills` or other Copilot skill mirror is created.
 
 Copilot is a first-class supported adapter and execution environment. Its validated/preferred role is currently independent read-only audit and second-opinion review. Coding is not claimed as validated, although the general adapter does not block capabilities provided by Copilot; that routing policy can expand later without changing skill ownership or discovery.
+
+Claude Code is an opt-in adapter that keeps `AGENTS.md` and `.agents/skills` canonical. A one-line `CLAUDE.md` imports `@AGENTS.md`; a tracked `SessionStart` hook in `.claude/settings.json` runs the local `.claude/agent-kit/claude-bootstrap.mjs`, which links `.claude/skills` to `.agents/skills` (junction on Windows, relative symlink elsewhere) before native skill discovery. The link is generated and git-ignored, never a committed symlink or copy, so there is still exactly one skill tree. Existing `CLAUDE.md`, settings, hooks, and links are preserved or refused, never overwritten. Details and the trust model are in `adapters/claude/README.md`.
 
 The kit has no model lock. Agent model choice belongs to environment/project configuration.
 

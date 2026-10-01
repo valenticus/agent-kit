@@ -1,0 +1,48 @@
+# Claude Code adapter
+
+Opt-in adapter (`-Tools claude`). Agent Kit stays agent-neutral: `AGENTS.md` and `.agents/skills` remain the only canonical instruction and skill locations, and this adapter only *exposes* them to Claude Code. Claude Code does not read `AGENTS.md` everywhere and does not discover `.agents/skills`, but it natively discovers `.claude/skills` and `CLAUDE.md`.
+
+```text
+AGENTS.md ──────────────► CLAUDE.md            (one line: @AGENTS.md)
+.agents/skills ─ bootstrap ─► .claude/skills   (generated link, git-ignored)
+                                  └─► Claude native skill discovery
+```
+
+## Installed files
+
+| Path | Tracked | Purpose |
+|---|---|---|
+| `CLAUDE.md` | yes | Bridge containing only `@AGENTS.md`; no policy is duplicated. |
+| `.claude/settings.json` | yes | Gains one `SessionStart` command hook; everything else is preserved. |
+| `.claude/agent-kit/claude-bootstrap.mjs` | yes | Auditable copy of `adapters/claude/claude-bootstrap.mjs` (Node.js, no dependencies). |
+| `.claude/skills` | **no** | Generated link to `.agents/skills`. Never a second skill tree. |
+| `.gitignore` | yes | Gains `/.claude/skills`. The rule has no trailing slash because Git sees a link as a file, not a directory. `.claude/` as a whole is not ignored. |
+
+Install: `install.ps1 -ProjectRoot <project> -Tools claude -Skills safe-change,debugging`. `claude` joins `codex`, `kilo`, and `copilot` in sharing one `.agents/skills` materialization, so combining tools never duplicates skills. To add Claude to a project that already has Agent Kit skills, pass `-Tools claude -Skills ''` (the installer refuses to overwrite existing skills).
+
+## Bootstrap and platforms
+
+The hook is `node "$CLAUDE_PROJECT_DIR/.claude/agent-kit/claude-bootstrap.mjs"`. Claude Code runs project `SessionStart` hooks before native skill discovery (verified in Claude Code on the web), so the link exists before the first prompt. The bootstrap is idempotent and silent on success (hook stdout would become model context).
+
+| Environment | `.claude/skills` |
+|---|---|
+| Windows | Junction to `.agents/skills`. Needs no elevation, Developer Mode, or `core.symlinks`. |
+| macOS / Linux / Claude Cloud | Relative symlink `../.agents/skills`. |
+
+`.claude/skills` is not committed: a committed symlink breaks Windows checkouts (it becomes a text file, or checkout fails with `core.symlinks=true` and no privilege), and Git traverses a junction and would stage duplicate skill files. The ignore rule prevents that.
+
+## Conflict behavior
+
+Nothing is overwritten or deleted; the installer validates everything before writing and refuses with an actionable message.
+
+- `CLAUDE.md`: absent → created. Present with an `@AGENTS.md` line → left as is. Otherwise refused; add the import manually.
+- `.claude/settings.json`: absent → created. Present strict JSON → the hook is appended to `hooks.SessionStart`, other keys, hooks, and indentation preserved, and re-installs never duplicate it. Comments, trailing commas, or an unexpected shape (`hooks` not an object, `SessionStart` not an array) are refused with the exact hook to add manually. A rewrite re-serializes the JSON file.
+- `.claude/agent-kit/claude-bootstrap.mjs`: identical → no-op; different → refused.
+- `.claude/skills`: correct link → no-op; wrong or broken link, real directory, or ordinary file → refused (the bootstrap fails with exit code 2 and a stderr diagnostic, leaving the path untouched). Recursive copy is never a fallback.
+- `.agents/skills` missing → refused; no broken adapter is created.
+
+## Trust
+
+The `SessionStart` hook is executable project behavior: opening the project in Claude Code runs the committed local bootstrap. It uses no network, secrets, remote code, or package installation, and writes only `.claude/skills`. Review `.claude/agent-kit/claude-bootstrap.mjs` like any other project script. Node.js must be on `PATH`; if it is missing the hook fails visibly and Claude Code still works without the skills link.
+
+Validation: `node scripts/validation/validate-claude.mjs` (bootstrap, settings merge, gitignore, installer step) plus `validate-installer.mjs` and `validate-install.mjs <project>`.

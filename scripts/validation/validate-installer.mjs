@@ -23,8 +23,10 @@ async function exists(file) {
   try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
+const shell = await execFileAsync('powershell', ['-NoProfile', '-Command', 'exit 0']).then(() => 'powershell', () => 'pwsh');
+
 async function runInstall(project, tools, extra = [], skills = 'safe-change') {
-  return execFileAsync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, '-Tools', tools.join(','), '-Skills', skills, ...extra]);
+  return execFileAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, '-Tools', tools.join(','), '-Skills', skills, ...extra]);
 }
 
 try {
@@ -90,7 +92,36 @@ try {
     if (!canonical.equals(shared) || !shared.equals(clineMirror)) throw new Error(`data-visualization/${relative}: installed copies differ from canonical source`);
   }
 
-  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, and opt-in data-visualization distribution.`);
+  // Claude adapter: opt-in, reuses the single .agents/skills materialization, never overwrites, and is idempotent when re-applied.
+  const claudeOnly = path.join(workspace, 'claude-only');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(claudeOnly));
+  await runInstall(claudeOnly, ['claude']);
+  await execFileAsync(process.execPath, [installValidator, claudeOnly]);
+  for (const relative of ['CLAUDE.md', '.claude/settings.json', '.claude/agent-kit/claude-bootstrap.mjs', '.agents/skills/safe-change/SKILL.md', '.claude/skills/safe-change/SKILL.md']) {
+    if (!await exists(path.join(claudeOnly, relative))) throw new Error(`claude-only: missing ${relative}`);
+  }
+  if (await exists(path.join(claudeOnly, '.cline')) || await exists(path.join(claudeOnly, '.github')) || await exists(path.join(claudeOnly, '.kilo'))) throw new Error('claude-only install gained other adapter output');
+  if ((await readdir(path.join(claudeOnly, '.agents', 'skills'))).join() !== 'safe-change') throw new Error('claude-only: shared skills not materialized exactly once');
+  let refusedClaudeRepeat = false;
+  try { await runInstall(claudeOnly, ['claude']); } catch { refusedClaudeRepeat = true; }
+  if (!refusedClaudeRepeat) throw new Error('claude: repeated install with skills did not preserve overwrite safety');
+  await runInstall(claudeOnly, ['claude'], [], '');
+  await execFileAsync(process.execPath, [installValidator, claudeOnly]);
+
+  const claudeAll = path.join(workspace, 'claude-all');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(claudeAll));
+  await runInstall(claudeAll, ['codex', 'cline', 'kilo', 'copilot', 'claude'], [], 'safe-change,debugging');
+  await execFileAsync(process.execPath, [installValidator, claudeAll]);
+  if ((await readdir(path.join(claudeAll, '.agents', 'skills'))).sort().join() !== 'debugging,safe-change') throw new Error('claude-all: selected skills not exposed exactly');
+
+  for (const tools of [['codex'], ['copilot'], ['codex', 'cline', 'kilo', 'copilot']]) {
+    const project = path.join(workspace, `no-claude-${tools.join('-')}`);
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(project));
+    await runInstall(project, tools);
+    if (await exists(path.join(project, '.claude')) || await exists(path.join(project, 'CLAUDE.md')) || await exists(path.join(project, '.gitignore'))) throw new Error(`${tools}: Claude files created without opt-in`);
+  }
+
+  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, and the opt-in Claude adapter.`);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

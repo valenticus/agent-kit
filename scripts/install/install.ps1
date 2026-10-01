@@ -11,10 +11,10 @@ $project = Resolve-Path $ProjectRoot
 $Tools = @($Tools | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $Skills = @($Skills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $OptionalSkills = @($OptionalSkills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-$allowedTools = @('codex','cline','kilo','copilot')
+$allowedTools = @('codex','cline','kilo','copilot','claude')
 foreach ($tool in $Tools) { if ($tool -notin $allowedTools) { throw "Unknown tool: $tool" } }
 function Install-Skill([string]$skill, [string]$source) {
-  if (@('codex','kilo','copilot') | Where-Object { $_ -in $Tools }) {
+  if (@('codex','kilo','copilot','claude') | Where-Object { $_ -in $Tools }) {
     $destination = Join-Path $project ".agents\skills\$skill"
     if (Test-Path -LiteralPath $destination) { throw "Refusing to overwrite $destination" }
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
@@ -29,6 +29,15 @@ function Install-Skill([string]$skill, [string]$source) {
 }
 
 if ($CopilotAuditor -and 'copilot' -notin $Tools) { throw '-CopilotAuditor requires copilot in -Tools' }
+$claudeAdapter = Join-Path $kitRoot 'scripts/install/claude-adapter.mjs'
+function Invoke-ClaudeAdapter([string]$command) {
+  & node $claudeAdapter $command --project $project.Path
+  if ($LASTEXITCODE -ne 0) { throw "Claude adapter $command failed (exit $LASTEXITCODE)" }
+}
+if ('claude' -in $Tools) {
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'The Claude adapter requires Node.js (also used by its SessionStart bootstrap) on PATH' }
+  Invoke-ClaudeAdapter 'preflight'
+}
 if ('copilot' -in $Tools) {
   $instructionsDestination = Join-Path $project '.github\copilot-instructions.md'
   if (Test-Path -LiteralPath $instructionsDestination) { throw ('Refusing to overwrite ' + $instructionsDestination) }
@@ -68,4 +77,5 @@ if ('kilo' -in $Tools) {
   New-Item -ItemType Directory -Force -Path (Split-Path $agentDestination) | Out-Null
   Copy-Item -LiteralPath (Join-Path $kitRoot 'agents\designer\agent.md') -Destination $agentDestination
 }
+if ('claude' -in $Tools) { Invoke-ClaudeAdapter 'install' }
 Write-Output "Installed approved core/vendored optional files. Referenced modules were not fetched. Project hooks and root instructions still require reviewed project-specific authoring."

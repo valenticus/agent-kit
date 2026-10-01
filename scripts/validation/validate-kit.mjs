@@ -38,10 +38,10 @@ for (const name of expectedOptional) {
     if (!/MIT License/.test(license) || !/Copyright/.test(license)) errors.push(`${name}: incomplete license notice`);
   } else if (!module.installHint) errors.push(`${name}: referenced module lacks installHint`);
 }
-const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs'];
+const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
-if (version !== '1.3.0') errors.push(`unexpected VERSION ${version}`);
+if (version !== '1.4.0') errors.push(`unexpected VERSION ${version}`);
 const hasUkrainianCommunicationPolicy = (text) => [
   /## Communication language/i,
   /Ukrainian by default/i,
@@ -93,8 +93,8 @@ for (const directory of ['core','agents','templates','adapters','scripts']) {
 }
 try { await stat(path.join(root, 'optional', 'vendored', 'vercel-react-best-practices')); errors.push('referenced Vercel skill must not be vendored'); } catch {}
 try { await stat(path.join(root, '.kilo', 'skills')); errors.push('kit must not contain a Kilo skill mirror'); } catch {}
-for (const mirror of [path.join(root, '.github', 'skills'), path.join(root, 'adapters', 'copilot', 'skills')]) {
-  try { await stat(mirror); errors.push(`kit must not contain a Copilot skill mirror at ${path.relative(root, mirror)}`); } catch {}
+for (const mirror of [path.join(root, '.claude', 'skills'), path.join(root, 'adapters', 'claude', 'skills'), path.join(root, '.github', 'skills'), path.join(root, 'adapters', 'copilot', 'skills')]) {
+  try { await stat(mirror); errors.push(`kit must not contain a Claude/Copilot skill mirror at ${path.relative(root, mirror)}`); } catch {}
 }
 const copilotAuditor = await readFile(path.join(root, 'adapters', 'copilot', 'project-auditor.agent.md'), 'utf8');
 if (!/^---\r?\nname:\s*\S/m.test(copilotAuditor) || !/\r?\ndescription:\s*\S/.test(copilotAuditor) || !/\r?\ndisable-model-invocation:\s*true/.test(copilotAuditor) || !/\r?\ntools:\s*\[[^\]]+\]\r?\n---/.test(copilotAuditor)) errors.push('Copilot auditor has invalid or non-manual agent frontmatter');

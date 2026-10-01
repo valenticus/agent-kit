@@ -24,6 +24,7 @@ Current Agent Kit additions that were independently authored after the initial s
 | Source | System | Purpose | Canonical/mirror | Classification | Dependencies |
 |---|---|---|---|---|---|
 | `core/skills/data-visualization` | shared | Question-first visualization decisions, truthfulness, composition, interaction, responsive behavior, accessibility, and QA | canonical opt-in core | original universal | project data semantics and UI realization |
+| `adapters/claude/claude-bootstrap.mjs`, `scripts/install/claude-adapter.mjs` | Claude Code | Generated `.claude/skills` link, `CLAUDE.md` bridge, settings hook merge, gitignore entry | adapter | original universal mechanism | Node.js, `AGENTS.md`, `.agents/skills` |
 
 The eight Cline copies were verified identical to their `.agents` counterparts. Vendor skills were intentionally not mirrored. Product names, financial rules, tables/RPCs, brand tokens, components, locale details, and screen names were excluded from active universal behavior and replaced with project hooks.
 
