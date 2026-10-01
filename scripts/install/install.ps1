@@ -4,11 +4,25 @@ param(
   [string[]]$Skills = @('safe-change','debugging','final-audit','product-ux','mobile-design','design-critique','security','ui'),
   [string[]]$OptionalSkills = @(),
   [switch]$CopilotAuditor,
-  [switch]$NoSkills
+  [switch]$NoSkills,
+  [switch]$UpdatePolicies
 )
 $ErrorActionPreference = 'Stop'
 $kitRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $project = Resolve-Path $ProjectRoot
+if ($UpdatePolicies) {
+  # Standalone, explicit upgrade of the managed Git-authorship block in an existing project's AGENTS.md.
+  foreach ($name in @('Tools','Skills','OptionalSkills','CopilotAuditor','NoSkills')) {
+    if ($PSBoundParameters.ContainsKey($name)) { throw "-UpdatePolicies is a standalone operation and cannot be combined with -$name" }
+  }
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw '-UpdatePolicies requires Node.js on PATH' }
+  $policyBlock = Join-Path $kitRoot 'scripts/install/policy-block.mjs'
+  foreach ($command in @('preflight-update','update')) {
+    & node $policyBlock $command --project $project.Path
+    if ($LASTEXITCODE -ne 0) { throw "Policy $command failed (exit $LASTEXITCODE)" }
+  }
+  return
+}
 $Tools = @($Tools | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($NoSkills -and ($PSBoundParameters.ContainsKey('Skills') -or $PSBoundParameters.ContainsKey('OptionalSkills'))) { throw '-NoSkills cannot be combined with -Skills or -OptionalSkills' }
 if ($NoSkills) { $Skills = @() }
@@ -43,6 +57,12 @@ if ('copilot' -in $Tools) {
   if ($CopilotAuditor) {
     $fileCopies += ,@((Join-Path $kitRoot 'adapters\copilot\project-auditor.agent.md'), (Join-Path $project '.github\agents\project-auditor.agent.md'))
   }
+}
+# A new project gets the canonical root instructions (with the managed Git-authorship block). An existing AGENTS.md is never touched here.
+$agentsDestination = Join-Path $project 'AGENTS.md'
+if (Test-Path -LiteralPath $agentsDestination -PathType Container) { throw "$agentsDestination is a directory, not a file" }
+if (-not (Test-Path -LiteralPath $agentsDestination)) {
+  $fileCopies += ,@((Join-Path $kitRoot 'templates\project-rules\AGENTS.md'), $agentsDestination)
 }
 foreach ($skill in $Skills) {
   $source = Join-Path $kitRoot "core\skills\$skill"

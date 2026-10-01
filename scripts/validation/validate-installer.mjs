@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -176,6 +177,86 @@ try {
     if (!failed) throw new Error(`${name}: install unexpectedly succeeded`);
     if (await snapshot(project) !== before) throw new Error(`${name}: failed install left a partial installation`);
   }
+
+  // Git-authorship policy: new installs get AGENTS.md; existing AGENTS.md is untouched; -UpdatePolicies is explicit, standalone, and zero-mutation on malformed markers.
+  const canonicalTemplate = await readFile(path.join(root, 'templates', 'project-rules', 'AGENTS.md'));
+  const freshAgents = path.join(workspace, 'policy-fresh');
+  await mkdir(freshAgents);
+  await runInstall(freshAgents, ['codex']);
+  if (!(await readFile(path.join(freshAgents, 'AGENTS.md'))).equals(canonicalTemplate)) throw new Error('new install did not create AGENTS.md from the canonical template');
+  const ownAgents = path.join(workspace, 'policy-own');
+  await mkdir(ownAgents);
+  await writeFile(path.join(ownAgents, 'AGENTS.md'), '# Project rules\n');
+  await runInstall(ownAgents, ['codex']);
+  if (await readFile(path.join(ownAgents, 'AGENTS.md'), 'utf8') !== '# Project rules\n') throw new Error('normal install modified an existing AGENTS.md');
+  const shellArgs = (project, extraArgs) => ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, ...extraArgs];
+  const runUpdate = (project, extraArgs = [], options = {}) => execFileAsync(shell, shellArgs(project, ['-UpdatePolicies', ...extraArgs]), options);
+  // Asserts the invocation fails for the EXPECTED reason (message), not merely with some non-zero exit.
+  async function failsWith(promise, pattern, label) {
+    try { await promise; } catch (error) {
+      const output = `${error.stdout ?? ''}${error.stderr ?? ''}${error.message ?? ''}`;
+      if (!pattern.test(output)) throw new Error(`${label}: failed for an unexpected reason: ${output.slice(0, 400)}`);
+      return;
+    }
+    throw new Error(`${label}: unexpectedly succeeded`);
+  }
+  // PATH without any directory that provides node, to prove which install paths genuinely need Node.
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const nodeFree = { env: { ...process.env, [pathKey]: (process.env[pathKey] ?? '').split(path.delimiter).filter((dir) => dir && !['node.exe', 'node'].some((name) => existsSync(path.join(dir, name)))).join(path.delimiter) } };
+  const nodeFreeShell = async (project, extraArgs) => execFileAsync(shell, shellArgs(project, extraArgs), nodeFree);
+
+  await runUpdate(ownAgents);
+  const upgraded = await readFile(path.join(ownAgents, 'AGENTS.md'), 'utf8');
+  if (!upgraded.startsWith('# Project rules\n') || !upgraded.includes('<!-- agent-kit:git-authorship:start -->')) throw new Error('-UpdatePolicies did not append the managed block');
+  await runUpdate(ownAgents);
+  if (await readFile(path.join(ownAgents, 'AGENTS.md'), 'utf8') !== upgraded) throw new Error('-UpdatePolicies is not idempotent');
+  const ownBefore = await snapshot(ownAgents);
+  for (const [combined, name] of [[['-Tools', 'codex'], 'Tools'], [['-NoSkills'], 'NoSkills'], [['-Skills', 'safe-change'], 'Skills'], [['-OptionalSkills', 'web-design-guidelines'], 'OptionalSkills'], [['-CopilotAuditor'], 'CopilotAuditor']]) {
+    await failsWith(runUpdate(ownAgents, combined), new RegExp(`standalone operation and cannot be combined with -${name}`), `-UpdatePolicies with ${name}`);
+  }
+  if (await snapshot(ownAgents) !== ownBefore) throw new Error('rejected -UpdatePolicies combinations mutated the project');
+
+  // -UpdatePolicies with no AGENTS.md creates it from the canonical template.
+  const absentAgents = path.join(workspace, 'policy-absent');
+  await mkdir(absentAgents);
+  await runUpdate(absentAgents);
+  if (!(await readFile(path.join(absentAgents, 'AGENTS.md'))).equals(canonicalTemplate)) throw new Error('-UpdatePolicies without AGENTS.md did not create it from the template');
+
+  // Project path containing spaces: normal install and -UpdatePolicies.
+  const spaced = path.join(workspace, 'project with spaces');
+  await mkdir(spaced);
+  await runInstall(spaced, ['codex']);
+  if (!(await readFile(path.join(spaced, 'AGENTS.md'))).equals(canonicalTemplate)) throw new Error('spaces: AGENTS.md was not created');
+  await writeFile(path.join(spaced, 'AGENTS.md'), '# Spaced project\n');
+  await runUpdate(spaced);
+  if (!(await readFile(path.join(spaced, 'AGENTS.md'), 'utf8')).includes('<!-- agent-kit:git-authorship:start -->')) throw new Error('spaces: -UpdatePolicies did not update');
+
+  // Node availability: creating AGENTS.md must not need Node; Claude and -UpdatePolicies do, and fail with zero mutation.
+  const noNodeProject = path.join(workspace, 'policy-no-node');
+  await mkdir(noNodeProject);
+  await nodeFreeShell(noNodeProject, ['-Tools', 'codex', '-Skills', 'safe-change']);
+  if (!(await readFile(path.join(noNodeProject, 'AGENTS.md'))).equals(canonicalTemplate)) throw new Error('without Node: normal install did not create AGENTS.md');
+  const noNodeClaude = path.join(workspace, 'policy-no-node-claude');
+  await mkdir(noNodeClaude);
+  const noNodeClaudeBefore = await snapshot(noNodeClaude);
+  await failsWith(nodeFreeShell(noNodeClaude, ['-Tools', 'claude', '-Skills', 'safe-change']), /requires Node\.js/, 'claude without Node');
+  if (await snapshot(noNodeClaude) !== noNodeClaudeBefore) throw new Error('claude without Node mutated the project');
+  const noNodeUpdate = path.join(workspace, 'policy-no-node-update');
+  await mkdir(noNodeUpdate);
+  await writeFile(path.join(noNodeUpdate, 'AGENTS.md'), '# Mine\n');
+  await failsWith(nodeFreeShell(noNodeUpdate, ['-UpdatePolicies']), /requires Node\.js/, '-UpdatePolicies without Node');
+  if (await readFile(path.join(noNodeUpdate, 'AGENTS.md'), 'utf8') !== '# Mine\n') throw new Error('-UpdatePolicies without Node mutated AGENTS.md');
+
+  // A fresh, correct installation must not trigger validate-install policy warnings.
+  const freshValidation = await execFileAsync(process.execPath, [installValidator, freshAgents]);
+  if (/warning:/i.test(freshValidation.stderr)) throw new Error(`fresh install produced a policy warning: ${freshValidation.stderr}`);
+
+  const malformedAgents = path.join(workspace, 'policy-malformed');
+  await mkdir(malformedAgents);
+  await writeFile(path.join(malformedAgents, 'AGENTS.md'), '# Mine\n<!-- agent-kit:git-authorship:start -->\n');
+  const malformedBefore = await snapshot(malformedAgents);
+  await failsWith(runUpdate(malformedAgents), /Policy update refused/, 'malformed markers');
+  if (await snapshot(malformedAgents) !== malformedBefore) throw new Error('-UpdatePolicies mutated a project with malformed markers');
 
   // Valid pre-existing directory ancestors must keep working.
   const validAncestors = path.join(workspace, 'valid-ancestors');

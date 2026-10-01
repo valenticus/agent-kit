@@ -10,7 +10,7 @@ Remain within this one-shot bootstrap task. Do not start loops, delegate, instal
 4. Draft project-ui, project-product, project-architecture, project-data, project-security, and project-rules from verified evidence. Leave unresolved questions explicit; do not import another project's answers or identity.
 5. Show the grouped proposal, routing reasons, evidence, installation command, referenced-module instructions, and conflicts before writing. Stack detection proposes; it never installs autonomously.
 6. Run the installer only with approved core and vendored optional selections. Referenced modules require their documented, separately approved installation path; never fetch them silently.
-7. Merge project hooks carefully, validate, and report installed/generated files, skipped or referenced modules, unresolved questions, and results.
+7. Merge project hooks carefully. The installer creates a root `AGENTS.md` from the project-rules template only when none exists and never modifies an existing one: complete that installed file (or merge project rules into the existing one) instead of creating a second `AGENTS.md`, and do not edit the managed policy blocks; propose `install.ps1 -UpdatePolicies` for an existing project that lacks the current blocks. Then validate and report installed/generated files, skipped or referenced modules, unresolved questions, and results.
 
 Example: for Supabase + Next.js, propose `safe-change`, `debugging`, `security`, and `ui`; optionally propose the Supabase and Vercel React modules; then create fresh project UI/product hooks. The user approves the final selection.
 

@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { locateBlock, normalizeEol } from '../install/policy-block.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const errors = [];
@@ -38,7 +39,7 @@ for (const name of expectedOptional) {
     if (!/MIT License/.test(license) || !/Copyright/.test(license)) errors.push(`${name}: incomplete license notice`);
   } else if (!module.installHint) errors.push(`${name}: referenced module lacks installHint`);
 }
-const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs'];
+const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs','scripts/install/policy-block.mjs','scripts/validation/validate-policy.mjs'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
 if (version !== '1.4.0') errors.push(`unexpected VERSION ${version}`);
@@ -51,7 +52,59 @@ const hasUkrainianCommunicationPolicy = (text) => [
 const rootRules = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
 if (!hasUkrainianCommunicationPolicy(rootRules)) errors.push('root AGENTS.md lacks the Agent Kit communication-language policy');
 const projectRules = await readFile(path.join(root, 'templates', 'project-rules', 'AGENTS.md'), 'utf8');
+const authorshipBlocks = [['root AGENTS.md', rootRules], ['project rules template', projectRules]].map(([name, text]) => {
+  try {
+    const normalized = normalizeEol(text);
+    const found = locateBlock(normalized);
+    if (!found) { errors.push(`${name} lacks the managed Git-authorship block`); return null; }
+    return normalized.slice(found.begin, found.end);
+  } catch (error) { errors.push(`${name}: ${error.message}`); return null; }
+});
+if (authorshipBlocks.every(Boolean)) {
+  if (authorshipBlocks[0] !== authorshipBlocks[1]) errors.push('managed Git-authorship blocks differ between root AGENTS.md and the project rules template');
+  const block = authorshipBlocks[1];
+  for (const pattern of [
+    /## Git authorship/,
+    /Agents may create commits; agents must not attribute those commits to themselves/,
+    /may create, amend, merge, release, and push commits/,
+    /preserve the human user's configured Git identity/i,
+    /Never identify an AI assistant[\s\S]{0,150}commit author or committer[\s\S]{0,80}Signed-off-by/i,
+    /Never set or modify `git config user\.name` or `git config user\.email` merely to identify the agent/,
+    /`--author`, `--reset-author`, `git -c user\.name=\.\.\.`, `git -c user\.email=\.\.\.`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`/,
+    /Never add AI attribution trailers such as `Co-Authored-By:/,
+    /Human co-authors explicitly requested by the user are allowed/,
+    /report the configuration problem to the user before creating a commit/,
+    /never blocks normal commits where the user's own identity is configured/,
+    /Do not rewrite already-published history/i,
+  ]) {
+    if (!pattern.test(block)) errors.push(`Git-authorship block is missing required rule ${pattern}`);
+  }
+  // The policy is about attribution, not a ban on agent-created commits.
+  for (const forbidden of [/\b(?:never|do not|must not|must never) (?:create|make|run|execute) (?:a )?(?:git )?commits?\b/i, /stop and ask/i, /refuse to commit/i]) {
+    if (forbidden.test(block)) errors.push(`Git-authorship block must not prohibit agent-created commits (${forbidden})`);
+  }
+}
 if (!hasUkrainianCommunicationPolicy(projectRules)) errors.push('project rules lack the canonical consumer-project communication-language policy');
+// Adapters, agents, skills, and non-rule templates must inherit authorship policy from AGENTS.md, never carry a copy.
+async function* walk(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) yield* walk(absolute);
+    else yield absolute;
+  }
+}
+const projectRulesFile = path.join(root, 'templates', 'project-rules', 'AGENTS.md');
+for (const directory of ['adapters', 'agents', 'core', 'templates']) {
+  for await (const file of walk(path.join(root, directory))) {
+    if (file === projectRulesFile) continue;
+    const text = await readFile(file, 'utf8');
+    if (/agent-kit:git-authorship|## Git authorship/i.test(text)) errors.push(`${path.relative(root, file)}: authorship policy must not be duplicated outside the canonical AGENTS.md block`);
+  }
+}
+for (const file of [path.join(root, 'README.md'), ...(await readdir(path.join(root, 'docs'))).map((name) => path.join(root, 'docs', name))]) {
+  const text = await readFile(file, 'utf8');
+  if (/Co-Authored-By/i.test(text)) errors.push(`${path.relative(root, file)}: must not mention AI co-author trailers`);
+}
 for (const agent of ['designer','coding','reviewer']) {
   const text = await readFile(path.join(root, 'agents', agent, 'agent.md'), 'utf8');
   if (!/^---\r?\ndescription:\s*\S/m.test(text) || !/\r?\nmode:\s*primary\r?\n/.test(text)) errors.push(`${agent}: invalid agent frontmatter`);
