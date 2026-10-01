@@ -25,8 +25,10 @@ async function exists(file) {
 
 const shell = await execFileAsync('powershell', ['-NoProfile', '-Command', 'exit 0']).then(() => 'powershell', () => 'pwsh');
 
+// skills === null selects the explicit -NoSkills switch instead of -Skills.
 async function runInstall(project, tools, extra = [], skills = 'safe-change') {
-  return execFileAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, '-Tools', tools.join(','), '-Skills', skills, ...extra]);
+  const skillArgs = skills === null ? ['-NoSkills'] : ['-Skills', skills];
+  return execFileAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, '-Tools', tools.join(','), ...skillArgs, ...extra]);
 }
 
 try {
@@ -105,7 +107,7 @@ try {
   let refusedClaudeRepeat = false;
   try { await runInstall(claudeOnly, ['claude']); } catch { refusedClaudeRepeat = true; }
   if (!refusedClaudeRepeat) throw new Error('claude: repeated install with skills did not preserve overwrite safety');
-  await runInstall(claudeOnly, ['claude'], [], '');
+  await runInstall(claudeOnly, ['claude'], [], null);
   await execFileAsync(process.execPath, [installValidator, claudeOnly]);
 
   const claudeAll = path.join(workspace, 'claude-all');
@@ -121,7 +123,53 @@ try {
     if (await exists(path.join(project, '.claude')) || await exists(path.join(project, 'CLAUDE.md')) || await exists(path.join(project, '.gitignore'))) throw new Error(`${tools}: Claude files created without opt-in`);
   }
 
-  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, and the opt-in Claude adapter.`);
+  // -NoSkills: adds Claude to an already-installed project through the real `powershell -File` argument path.
+  const noSkills = path.join(workspace, 'no-skills');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(noSkills));
+  await runInstall(noSkills, ['codex']);
+  await runInstall(noSkills, ['claude'], [], null);
+  await execFileAsync(process.execPath, [installValidator, noSkills]);
+  if (!await exists(path.join(noSkills, '.claude', 'skills', 'safe-change', 'SKILL.md'))) throw new Error('-NoSkills: Claude link does not expose existing skills');
+  if ((await readdir(path.join(noSkills, '.agents', 'skills'))).join() !== 'safe-change') throw new Error('-NoSkills: skills were modified');
+  await runInstall(noSkills, ['claude'], [], null);
+  let ambiguous = false;
+  try { await runInstall(noSkills, ['claude'], ['-Skills', 'debugging'], null); } catch { ambiguous = true; }
+  if (!ambiguous) throw new Error('-NoSkills combined with -Skills was accepted');
+
+  // Global preflight: a predictable conflict must fail before the first mutation and leave the project byte-identical.
+  async function snapshot(dir) {
+    const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+    const result = [];
+    for (const entry of entries) {
+      const full = path.join(entry.parentPath, entry.name);
+      result.push(`${path.relative(dir, full)}${entry.isFile() ? `:${(await readFile(full)).toString('base64')}` : ''}`);
+    }
+    return result.sort().join('\n');
+  }
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const conflicts = [
+    ['later skill conflict', ['codex'], 'safe-change,debugging', [], async (p) => mkdir(path.join(p, '.agents', 'skills', 'debugging'), { recursive: true })],
+    ['later skill conflict in Cline destination', ['cline'], 'safe-change,debugging', [], async (p) => mkdir(path.join(p, '.cline', 'skills', 'debugging'), { recursive: true })],
+    ['Cline conflict with shared destinations free', ['codex', 'cline'], 'safe-change', [], async (p) => mkdir(path.join(p, '.cline', 'skills', 'safe-change'), { recursive: true })],
+    ['Kilo agent conflict', ['kilo'], 'safe-change', [], async (p) => { await mkdir(path.join(p, '.kilo', 'agents'), { recursive: true }); await writeFile(path.join(p, '.kilo', 'agents', 'project-designer.md'), 'mine'); }],
+    ['Copilot instructions conflict', ['codex', 'copilot'], 'safe-change', [], async (p) => { await mkdir(path.join(p, '.github'), { recursive: true }); await writeFile(path.join(p, '.github', 'copilot-instructions.md'), 'mine'); }],
+    ['Copilot auditor conflict', ['codex', 'copilot'], 'safe-change', ['-CopilotAuditor'], async (p) => { await mkdir(path.join(p, '.github', 'agents'), { recursive: true }); await writeFile(path.join(p, '.github', 'agents', 'project-auditor.agent.md'), 'mine'); }],
+    ['Claude CLAUDE.md conflict', ['codex', 'claude'], 'safe-change', [], async (p) => writeFile(path.join(p, 'CLAUDE.md'), 'own rules without import\n')],
+    ['Claude without canonical skills', ['codex', 'claude'], null, [], async (p) => writeFile(path.join(p, 'keep.txt'), 'x')],
+    ['unknown later skill', ['codex', 'kilo'], 'safe-change,not-a-skill', [], async () => {}],
+  ];
+  for (const [name, tools, skills, extraArgs, seed] of conflicts) {
+    const project = path.join(workspace, `preflight-${name.replaceAll(' ', '-')}`);
+    await mkdir(project);
+    await seed(project);
+    const before = await snapshot(project);
+    let failed = false;
+    try { await runInstall(project, tools, extraArgs, skills); } catch { failed = true; }
+    if (!failed) throw new Error(`${name}: install unexpectedly succeeded`);
+    if (await snapshot(project) !== before) throw new Error(`${name}: failed install left a partial installation`);
+  }
+
+  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight.`);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

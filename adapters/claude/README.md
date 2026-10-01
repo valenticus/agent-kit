@@ -18,7 +18,9 @@ AGENTS.md ──────────────► CLAUDE.md            (on
 | `.claude/skills` | **no** | Generated link to `.agents/skills`. Never a second skill tree. |
 | `.gitignore` | yes | Gains `/.claude/skills`. The rule has no trailing slash because Git sees a link as a file, not a directory. `.claude/` as a whole is not ignored. |
 
-Install: `install.ps1 -ProjectRoot <project> -Tools claude -Skills safe-change,debugging`. `claude` joins `codex`, `kilo`, and `copilot` in sharing one `.agents/skills` materialization, so combining tools never duplicates skills. To add Claude to a project that already has Agent Kit skills, pass `-Tools claude -Skills ''` (the installer refuses to overwrite existing skills).
+Install: `install.ps1 -ProjectRoot <project> -Tools claude -Skills safe-change,debugging`. `claude` joins `codex`, `kilo`, and `copilot` in sharing one `.agents/skills` materialization, so combining tools never duplicates skills. To add Claude to a project that already has Agent Kit skills, pass `-Tools claude -NoSkills`: no skills are copied and the link exposes the existing `.agents/skills`. `-NoSkills` cannot be combined with `-Skills` or `-OptionalSkills`, and it is refused if `.agents/skills` does not exist.
+
+The installer plans and checks every destination (skills, tool files, Claude adapter) before writing anything; a predictable conflict fails the whole invocation with nothing changed.
 
 ## Bootstrap and platforms
 

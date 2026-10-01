@@ -6,7 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { ensureSkillsLink, inspectSkillsLink, POSIX_LINK_TARGET } from '../../adapters/claude/claude-bootstrap.mjs';
-import { BOOTSTRAP_RELATIVE, HOOK_COMMAND, install, planSettings } from '../install/claude-adapter.mjs';
+import { BOOTSTRAP_RELATIVE, HOOK_COMMAND, install, isAgentKitHook, planSettings } from '../install/claude-adapter.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workspace = fs.mkdtempSync(path.join(tmpdir(), 'agent-kit-claude-'));
@@ -30,6 +30,8 @@ const write = (dir, rel, content) => { fs.mkdirSync(path.dirname(path.join(dir, 
 const settingsOf = (dir) => JSON.parse(read(dir, '.claude/settings.json'));
 const hookCount = (settings) => JSON.stringify(settings).split(BOOTSTRAP_RELATIVE).length - 1;
 const refuses = (fn, pattern) => assert.throws(fn, (error) => pattern.test(error.message));
+// EOL-independent but strict: the bridge is exactly one "@AGENTS.md" line, nothing else.
+const isBridgeOnly = (text) => text.replace(/\r?\n$/, '') === '@AGENTS.md';
 const check = (name, fn) => { try { fn(); checks++; } catch (error) { error.message = `${name}: ${error.message}`; throw error; } };
 
 try {
@@ -42,12 +44,14 @@ try {
 
   // B. CLAUDE.md bridge
   check('CLAUDE.md template is a bare import', () => {
-    assert.equal(fs.readFileSync(path.join(root, 'adapters', 'claude', 'CLAUDE.template.md'), 'utf8').trim(), '@AGENTS.md');
+    assert.ok(isBridgeOnly(fs.readFileSync(path.join(root, 'adapters', 'claude', 'CLAUDE.template.md'), 'utf8')));
+    for (const good of ['@AGENTS.md', '@AGENTS.md\n', '@AGENTS.md\r\n']) assert.ok(isBridgeOnly(good), JSON.stringify(good));
+    for (const bad of ['@AGENTS.md\nExtra rule\n', '# Title\n@AGENTS.md\n', '@AGENTS.md extra\n', '\n@AGENTS.md\n', '@AGENTS.md\n\n', '']) assert.ok(!isBridgeOnly(bad), JSON.stringify(bad));
   });
   check('CLAUDE.md create / preserve', () => {
     const dir = project();
     install(dir);
-    assert.equal(read(dir, 'CLAUDE.md'), '@AGENTS.md\n');
+    assert.ok(isBridgeOnly(read(dir, 'CLAUDE.md')));
     const other = project();
     write(other, 'CLAUDE.md', 'Existing Claude rules\n@AGENTS.md\n');
     install(other);
@@ -123,7 +127,54 @@ try {
     refuses(() => ensureSkillsLink(dir, { fsImpl: mock, platform: 'win32' }), /No fallback copy/);
     assert.ok(!fs.existsSync(path.join(dir, '.claude', 'skills')));
   });
-  if (process.platform !== 'win32') skipped.push('real Windows junction creation (requires a Windows host; confirmed manually in research)');
+  // Windows-native junction coverage (real junctions in disposable directories; runs only on a Windows host).
+  if (process.platform === 'win32') {
+    const winProject = () => {
+      const dir = project();
+      const spaced = path.join(workspace, `with space ${counter++}`);
+      fs.renameSync(dir, spaced);
+      return spaced;
+    };
+    check('win32 real junction: create (path with spaces), no-op, state inspection', () => {
+      const dir = winProject();
+      assert.equal(ensureSkillsLink(dir).status, 'created');
+      const link = path.join(dir, '.claude', 'skills');
+      assert.ok(fs.lstatSync(link).isSymbolicLink());
+      assert.equal(inspectSkillsLink(dir).state, 'correct');
+      assert.ok(fs.existsSync(path.join(link, 'safe-change', 'SKILL.md')));
+      assert.equal(ensureSkillsLink(dir).status, 'unchanged');
+    });
+    check('win32 real junction: wrong and broken junctions refused', () => {
+      const dir = winProject();
+      fs.mkdirSync(path.join(dir, 'elsewhere'));
+      fs.mkdirSync(path.join(dir, '.claude'));
+      fs.symlinkSync(path.join(dir, 'elsewhere'), path.join(dir, '.claude', 'skills'), 'junction');
+      refuses(() => ensureSkillsLink(dir), /does not resolve/);
+      const broken = winProject();
+      fs.mkdirSync(path.join(broken, 'gone'));
+      fs.mkdirSync(path.join(broken, '.claude'));
+      fs.symlinkSync(path.join(broken, 'gone'), path.join(broken, '.claude', 'skills'), 'junction');
+      fs.rmdirSync(path.join(broken, 'gone'));
+      refuses(() => ensureSkillsLink(broken), /does not resolve/);
+    });
+    check('win32: real directory, ordinary file, missing canonical refused', () => {
+      const dir = winProject();
+      write(dir, '.claude/skills/own/SKILL.md', 'mine');
+      refuses(() => ensureSkillsLink(dir), /real directory/);
+      const file = winProject();
+      write(file, '.claude/skills', 'mine');
+      refuses(() => ensureSkillsLink(file), /ordinary file/);
+      refuses(() => ensureSkillsLink(project({ skills: false })), /Canonical skills directory/);
+    });
+    check('win32: installer step creates a junction and git ignores it', () => {
+      const dir = winProject();
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      install(dir);
+      execFileSync('git', ['add', '-A'], { cwd: dir });
+      const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: dir, encoding: 'utf8' }).split('\n').filter(Boolean);
+      assert.ok(staged.every((file) => !file.startsWith('.claude/skills')), `staged: ${staged}`);
+    });
+  } else skipped.push('real Windows junction cases (run only on a Windows host)');
 
   // E. settings integration
   check('settings: none -> created with one hook', () => {
@@ -151,6 +202,33 @@ try {
     install(dir);
     assert.equal(read(dir, '.claude/settings.json'), before);
     assert.equal(hookCount(settingsOf(dir)), 1);
+  });
+  check('settings: exact hook identity (substring/embedded/wrong-type are not the Agent Kit hook)', () => {
+    const exact = { type: 'command', command: HOOK_COMMAND };
+    assert.ok(isAgentKitHook(exact));
+    for (const notHook of [
+      { type: 'command', command: `echo ${BOOTSTRAP_RELATIVE}` },
+      { type: 'command', command: `${HOOK_COMMAND} && echo extra` },
+      { type: 'command', command: `echo hi; ${HOOK_COMMAND}` },
+      { type: 'prompt', command: HOOK_COMMAND },
+      { command: HOOK_COMMAND },
+      null, 'string', [],
+    ]) assert.ok(!isAgentKitHook(notHook), JSON.stringify(notHook));
+    for (const impostor of [{ type: 'command', command: `echo ${BOOTSTRAP_RELATIVE}` }, { type: 'command', command: `${HOOK_COMMAND} && echo extra` }, { type: 'prompt', command: HOOK_COMMAND }]) {
+      const dir = project();
+      write(dir, '.claude/settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [impostor] }] } }));
+      install(dir);
+      const groups = settingsOf(dir).hooks.SessionStart;
+      assert.equal(groups.length, 2, 'real hook must be added next to the impostor');
+      assert.deepEqual(groups[0].hooks[0], impostor);
+      assert.deepEqual(groups[1].hooks[0], exact);
+      install(dir);
+      assert.equal(settingsOf(dir).hooks.SessionStart.length, 2, 'exact hook must not duplicate');
+    }
+    const dir = project();
+    write(dir, '.claude/settings.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [exact] }] } }));
+    install(dir);
+    assert.equal(settingsOf(dir).hooks.SessionStart.length, 1);
   });
   check('settings: malformed / unsafe -> refusal, file untouched', () => {
     for (const bad of ['{ "hooks": ', '// comment\n{}', '[]', '{"hooks":[]}', '{"hooks":{"SessionStart":{}}}', 'null']) {

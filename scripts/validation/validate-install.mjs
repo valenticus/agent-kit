@@ -1,8 +1,10 @@
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const { isAgentKitHook } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'claude-adapter.mjs')).href);
 const project = path.resolve(process.argv[2] ?? '.');
 const agents = path.join(project, '.agents', 'skills');
 const cline = path.join(project, '.cline', 'skills');
@@ -55,13 +57,13 @@ try {
     if (await realpath(claudeLink).catch(() => null) !== await realpath(agents)) throw new Error('.claude/skills does not resolve to .agents/skills');
   }
   if (await exists(bootstrapPath)) {
-    const kitBootstrap = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'adapters', 'claude', 'claude-bootstrap.mjs');
+    const kitBootstrap = path.join(kitRoot, 'adapters', 'claude', 'claude-bootstrap.mjs');
     if (!(await readFile(bootstrapPath)).equals(await readFile(kitBootstrap))) throw new Error('.claude/agent-kit/claude-bootstrap.mjs differs from the Agent Kit bootstrap');
     const claudeMd = await exists(claudeMdPath) ? await readFile(claudeMdPath, 'utf8') : '';
     if (!claudeMd.split(/\r?\n/).some((line) => line.trim() === '@AGENTS.md')) throw new Error('invalid Claude bridge: CLAUDE.md must import @AGENTS.md');
     let settings;
     try { settings = JSON.parse((await readFile(claudeSettingsPath, 'utf8')).replace(/^\uFEFF/, '')); } catch { throw new Error('.claude/settings.json is missing or invalid JSON'); }
-    const hooks = (settings?.hooks?.SessionStart ?? []).flatMap((group) => group?.hooks ?? []).filter((hook) => typeof hook?.command === 'string' && hook.command.includes('.claude/agent-kit/claude-bootstrap.mjs'));
+    const hooks = (settings?.hooks?.SessionStart ?? []).flatMap((group) => (Array.isArray(group?.hooks) ? group.hooks : [])).filter(isAgentKitHook);
     if (hooks.length !== 1) throw new Error(`expected exactly one Agent Kit SessionStart hook, found ${hooks.length}`);
     const gitignore = await exists(path.join(project, '.gitignore')) ? await readFile(path.join(project, '.gitignore'), 'utf8') : '';
     if (!gitignore.split(/\r?\n/).some((line) => ['/.claude/skills', '.claude/skills'].includes(line.trim()))) throw new Error('generated .claude/skills is not git-ignored');

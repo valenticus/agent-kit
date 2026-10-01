@@ -15,6 +15,8 @@ New projects must define their own UI, product, architecture, data, security, an
 5. Complete the generated project hooks and merge them into the project's instruction system.
 6. Run `node <kit>/scripts/validation/validate-kit.mjs`, `node <kit>/scripts/validation/validate-installer.mjs`, `node <kit>/scripts/validation/validate-claude.mjs`, and `node <kit>/scripts/validation/validate-install.mjs <project>`.
 
+The installer checks every destination before writing anything and refuses to overwrite, so a conflict never leaves a partial installation. Use `-NoSkills` (instead of `-Skills`) to run an invocation that copies no skills, for example `-Tools claude -NoSkills` to add Claude to a project whose `.agents/skills` already exists.
+
 Installation is an explicit, one-shot operation. It does not start agents, loops, commits, dependency installation, or synchronization.
 
 The default `-Skills` selection stays compact. Install `data-visualization` explicitly with `-Skills data-visualization` or include it in a comma-separated core skill selection when visualization decisions are material.

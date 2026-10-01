@@ -13,7 +13,11 @@ export const BOOTSTRAP_RELATIVE = '.claude/agent-kit/claude-bootstrap.mjs';
 export const HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${BOOTSTRAP_RELATIVE}"`;
 export const GITIGNORE_ENTRY = '/.claude/skills';
 const GITIGNORE_COMMENT = '# Agent Kit: generated Claude Code skills link (never commit)';
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const BRIDGE_LINE = '@AGENTS.md';
+
+// Single definition of "this is the Agent Kit hook": exact structure, type, and command. Shared with validate-install.
+export const isAgentKitHook = (hook) => isPlainObject(hook) && hook.type === 'command' && hook.command === HOOK_COMMAND;
 
 export class AdapterRefusal extends Error {}
 const refuse = (message) => { throw new AdapterRefusal(message); };
@@ -22,7 +26,6 @@ function readIfPresent(file, encoding) {
   try { return fs.readFileSync(file, encoding); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export function planClaudeMd(existing, template) {
   if (existing === null) return { action: 'create', content: template };
@@ -47,8 +50,7 @@ export function planSettings(existing) {
   if (data.hooks !== undefined && !isPlainObject(data.hooks)) return refuse(`.claude/settings.json "hooks" is not an object. ${manual}`);
   const sessionStart = data.hooks?.SessionStart;
   if (sessionStart !== undefined && !Array.isArray(sessionStart)) return refuse(`.claude/settings.json "hooks.SessionStart" is not an array. ${manual}`);
-  const present = (sessionStart ?? []).some((group) => isPlainObject(group) && Array.isArray(group.hooks)
-    && group.hooks.some((hook) => isPlainObject(hook) && typeof hook.command === 'string' && hook.command.includes(BOOTSTRAP_RELATIVE)));
+  const present = (sessionStart ?? []).some((group) => isPlainObject(group) && Array.isArray(group.hooks) && group.hooks.some(isAgentKitHook));
   if (present) return { action: 'noop' };
   data.hooks = { ...(data.hooks ?? {}), SessionStart: [...(sessionStart ?? []), entry] };
   const indent = /^(\t+|[ ]+)"/m.exec(text)?.[1] ?? '  ';
