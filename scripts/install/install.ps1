@@ -66,12 +66,26 @@ foreach ($skill in $OptionalSkills) {
 if ('kilo' -in $Tools) {
   $fileCopies += ,@((Join-Path $kitRoot 'agents\designer\agent.md'), (Join-Path $project '.kilo\agents\project-designer.md'))
 }
-if ('claude' -in $Tools -and -not (@($directoryCopies | Where-Object { $_[1].StartsWith((Join-Path $project '.agents\skills\'), [System.StringComparison]::OrdinalIgnoreCase) })) -and -not (Test-Path -LiteralPath (Join-Path $project '.agents\skills'))) {
+if ('claude' -in $Tools -and -not (@($directoryCopies | Where-Object { $_[1].StartsWith((Join-Path $project '.agents\skills\'), [System.StringComparison]::OrdinalIgnoreCase) })) -and -not (Test-Path -LiteralPath (Join-Path $project '.agents\skills') -PathType Container)) {
   throw 'The Claude adapter exposes existing canonical skills, but .agents\skills is missing and no shared skills are selected'
+}
+# Every existing ancestor between the project root and a destination must be able to act as a directory.
+# An ordinary file, or a link whose target is missing or not a directory, fails; a link to a valid directory is allowed.
+function Assert-UsableAncestors([string]$destination) {
+  $root = $project.Path.TrimEnd('\', '/')
+  $current = Split-Path -Parent $destination
+  while ($current -and $current.Length -gt $root.Length -and $current.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+    if ($null -ne $item -and -not (Test-Path -LiteralPath $current -PathType Container)) {
+      throw "Refusing to install $destination because $current exists but is not a usable directory"
+    }
+    $current = Split-Path -Parent $current
+  }
 }
 $planned = @{}
 foreach ($copy in @($directoryCopies) + @($fileCopies)) {
   $destination = $copy[1]
+  Assert-UsableAncestors $destination
   if (Test-Path -LiteralPath $destination) { throw "Refusing to overwrite $destination" }
   if ($planned.ContainsKey($destination.ToLowerInvariant())) { throw "Refusing to write $destination twice in one invocation" }
   $planned[$destination.ToLowerInvariant()] = $true

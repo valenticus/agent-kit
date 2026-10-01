@@ -156,6 +156,14 @@ try {
     ['Copilot auditor conflict', ['codex', 'copilot'], 'safe-change', ['-CopilotAuditor'], async (p) => { await mkdir(path.join(p, '.github', 'agents'), { recursive: true }); await writeFile(path.join(p, '.github', 'agents', 'project-auditor.agent.md'), 'mine'); }],
     ['Claude CLAUDE.md conflict', ['codex', 'claude'], 'safe-change', [], async (p) => writeFile(path.join(p, 'CLAUDE.md'), 'own rules without import\n')],
     ['Claude without canonical skills', ['codex', 'claude'], null, [], async (p) => writeFile(path.join(p, 'keep.txt'), 'x')],
+    ['ordinary file at .cline', ['codex', 'cline'], 'safe-change', [], async (p) => writeFile(path.join(p, '.cline'), 'mine')],
+    ['ordinary file at .cline/skills', ['codex', 'cline'], 'safe-change', [], async (p) => { await mkdir(path.join(p, '.cline')); await writeFile(path.join(p, '.cline', 'skills'), 'mine'); }],
+    ['ordinary file at .agents', ['codex', 'cline'], 'safe-change', [], async (p) => writeFile(path.join(p, '.agents'), 'mine')],
+    ['ordinary file at .agents/skills', ['kilo'], 'safe-change', [], async (p) => { await mkdir(path.join(p, '.agents')); await writeFile(path.join(p, '.agents', 'skills'), 'mine'); }],
+    ['ordinary file at .github', ['codex', 'copilot'], 'safe-change', [], async (p) => writeFile(path.join(p, '.github'), 'mine')],
+    ['ordinary file at .github/agents', ['codex', 'copilot'], 'safe-change', ['-CopilotAuditor'], async (p) => { await mkdir(path.join(p, '.github')); await writeFile(path.join(p, '.github', 'agents'), 'mine'); }],
+    ['ordinary file at .kilo', ['codex', 'kilo'], 'safe-change', [], async (p) => writeFile(path.join(p, '.kilo'), 'mine')],
+    ['ordinary file at .claude', ['codex', 'claude'], 'safe-change', [], async (p) => writeFile(path.join(p, '.claude'), 'mine')],
     ['unknown later skill', ['codex', 'kilo'], 'safe-change,not-a-skill', [], async () => {}],
   ];
   for (const [name, tools, skills, extraArgs, seed] of conflicts) {
@@ -169,7 +177,15 @@ try {
     if (await snapshot(project) !== before) throw new Error(`${name}: failed install left a partial installation`);
   }
 
-  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight.`);
+  // Valid pre-existing directory ancestors must keep working.
+  const validAncestors = path.join(workspace, 'valid-ancestors');
+  await mkdir(path.join(validAncestors, '.cline', 'skills'), { recursive: true });
+  await mkdir(path.join(validAncestors, '.agents', 'skills'), { recursive: true });
+  await mkdir(path.join(validAncestors, '.github'), { recursive: true });
+  await runInstall(validAncestors, ['codex', 'cline', 'copilot']);
+  if (!await exists(path.join(validAncestors, '.cline', 'skills', 'safe-change', 'SKILL.md'))) throw new Error('valid existing ancestor directories were rejected');
+
+  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight including non-directory ancestors.`);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
