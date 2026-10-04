@@ -42,7 +42,7 @@ for (const name of expectedOptional) {
 const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs','scripts/install/policy-block.mjs','scripts/validation/validate-policy.mjs'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
-if (version !== '1.5.0') errors.push(`unexpected VERSION ${version}`);
+if (version !== '1.6.0') errors.push(`unexpected VERSION ${version}`);
 const hasUkrainianCommunicationPolicy = (text) => [
   /## Communication language/i,
   /Ukrainian by default/i,
@@ -151,5 +151,33 @@ for (const mirror of [path.join(root, '.claude', 'skills'), path.join(root, 'ada
 }
 const copilotAuditor = await readFile(path.join(root, 'adapters', 'copilot', 'project-auditor.agent.md'), 'utf8');
 if (!/^---\r?\nname:\s*\S/m.test(copilotAuditor) || !/\r?\ndescription:\s*\S/.test(copilotAuditor) || !/\r?\ndisable-model-invocation:\s*true/.test(copilotAuditor) || !/\r?\ntools:\s*\[[^\]]+\]\r?\n---/.test(copilotAuditor)) errors.push('Copilot auditor has invalid or non-manual agent frontmatter');
+// Behavioral-testing methodology: validate only the stable catalog anchors, not Markdown layout or prose.
+const behavioralTestingRel = 'core/methodology/behavioral-testing.md';
+let behavioralTesting = null;
+try { behavioralTesting = normalizeEol(await readFile(path.join(root, behavioralTestingRel), 'utf8')); }
+catch { errors.push(`missing ${behavioralTestingRel}`); }
+if (behavioralTesting !== null) {
+  const cells = (line) => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => cell.trim());
+  const rows = behavioralTesting.split('\n').filter((line) => /^\s*\|/.test(line)).map(cells);
+  const header = ['ID', 'Scenario', 'Decision', 'Type', 'When', 'Pass condition', 'Evidence status'];
+  if (!rows.some((row) => row.join('|') === header.join('|'))) errors.push(`${behavioralTestingRel}: scenario catalog header not found`);
+  const scenarios = ['language-response', 'git-attribution', 'git-identity', 'dirty-tree', 'scope-control', 'skill-stacking', 'evidence-claim', 'debug-before-evidence', 'destructive-git', 'adapter-inheritance'];
+  const byId = new Map();
+  for (const id of scenarios) {
+    const matches = rows.filter((row) => row[0] === id);
+    if (matches.length !== 1) { errors.push(`${behavioralTestingRel}: scenario ${id} must appear exactly once (found ${matches.length})`); continue; }
+    const [, , decision, type] = matches[0];
+    if (!['KEEP', 'DEFER', 'DROP'].includes(decision)) errors.push(`${behavioralTestingRel}: scenario ${id} has invalid decision ${decision}`);
+    if (!['deterministic', 'behavioral', 'hybrid'].includes(type)) errors.push(`${behavioralTestingRel}: scenario ${id} has invalid type ${type}`);
+    byId.set(id, matches[0]);
+  }
+  const evidenceOf = (id) => (byId.get(id) ?? []).slice(6).join('|');
+  if (byId.has('language-response') && !(/E1/.test(evidenceOf('language-response')) && /demonstrated/i.test(evidenceOf('language-response')) && /STRONG SIGNAL/.test(evidenceOf('language-response')))) errors.push(`${behavioralTestingRel}: language-response must record E1 as demonstrated, STRONG SIGNAL`);
+  if (byId.has('git-attribution') && !(/E2/.test(evidenceOf('git-attribution')) && /INCONCLUSIVE/.test(evidenceOf('git-attribution')))) errors.push(`${behavioralTestingRel}: git-attribution must record E2 as INCONCLUSIVE`);
+}
+const sharedPrinciples = await readFile(path.join(root, 'core', 'methodology', 'principles.md'), 'utf8');
+if (!/Support each material success claim with evidence that remains valid for that claim/.test(sharedPrinciples) || !/stale, manual, external, or unrun checks/.test(sharedPrinciples)) errors.push('core/methodology/principles.md lacks the evidence-to-claim principle');
+const readmeText = await readFile(path.join(root, 'README.md'), 'utf8');
+if (!/\]\(core\/methodology\/behavioral-testing\.md\)/.test(readmeText)) errors.push('README.md must link to core/methodology/behavioral-testing.md');
 if (errors.length) { console.error(errors.join('\n')); process.exitCode = 1; }
 else console.log(`Validated ${skillFiles.length} core/project skill schemas, ${expectedOptional.length} optional modules, licenses, agents, Copilot adapter, links, version, and no unnecessary skill mirrors.`);

@@ -39,4 +39,4 @@ Claude Code support is opt-in and adds no second skill tree: a small bridge, one
 
 Copilot is a first-class supported execution environment and shares `.agents/skills` without another skill copy. Its currently validated and preferred role is independent read-only repository audit and second-opinion review; a coding role remains pending controlled project validation.
 
-See `docs/architecture.md`, `docs/source-inventory.md`, `docs/promotion-and-updates.md`, and `docs/attribution.md`.
+See `docs/architecture.md`, `docs/source-inventory.md`, `docs/promotion-and-updates.md`, and `docs/attribution.md`. Maintainer-only guidance for evidence-based behavioral checks of instruction changes is in [`core/methodology/behavioral-testing.md`](core/methodology/behavioral-testing.md).
