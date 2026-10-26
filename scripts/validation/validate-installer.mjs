@@ -1,10 +1,11 @@
+import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { promisify } from 'node:util';
+import { promisify, stripVTControlCharacters } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +23,45 @@ const combinations = [
 async function exists(file) {
   try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
+
+function normalizeErrorOutput(output) {
+  // PowerShell's wrapped error lines can carry a presentation gutter after ANSI styling.
+  return stripVTControlCharacters(output).replace(/^\s*\|\s?/gm, '').replace(/\s+/g, ' ').trim();
+}
+
+function errorDiagnostic(output) {
+  const limit = 4096;
+  if (output.length <= limit) return output;
+  return `${output.slice(0, limit / 2)} ... [${output.length - limit} characters omitted] ... ${output.slice(-limit / 2)}`;
+}
+
+// Asserts the specific refusal reason, not merely a non-zero exit or shortened message.
+async function failsWith(promise, pattern, label) {
+  try { await promise; } catch (error) {
+    const output = normalizeErrorOutput(`${error.stdout ?? ''}\n${error.stderr ?? ''}\n${error.message ?? ''}`);
+    if (!pattern.test(output)) throw new Error(`${label}: expected ${pattern}; received: ${errorDiagnostic(output)}`);
+    return;
+  }
+  throw new Error(`${label}: unexpectedly succeeded`);
+}
+
+async function testErrorOutput() {
+  const expected = /standalone operation and cannot be combined with -Tools/;
+  const refusal = 'standalone operation and cannot be combined with -Tools';
+  const rejected = (stderr) => Promise.reject(Object.assign(new Error('command failed'), { stderr }));
+  assert.equal(normalizeErrorOutput('\u001b[31mhello\u001b[0m\r\n\t world'), 'hello world');
+  await failsWith(rejected(refusal), expected, 'plain refusal');
+  await failsWith(rejected('\u001b[31;1m| standalone operation and\u001b[0m\r\n\u001b[31m| cannot be combined\n| with -Tools\u001b[0m'), expected, 'formatted refusal');
+  await assert.rejects(failsWith(rejected(refusal.replace('-Tools', '-Skills')), expected, 'wrong reason'), /expected .*received:/);
+  await assert.rejects(failsWith(rejected('standalone operation and cannot be combined with …'), expected, 'truncated refusal'), /expected .*received:/);
+  await assert.rejects(failsWith(Promise.resolve(), expected, 'success'), /unexpectedly succeeded/);
+  const diagnostic = errorDiagnostic('a'.repeat(5000) + ' decisive error at tail');
+  assert.ok(diagnostic.length < 4200 && diagnostic.includes('characters omitted') && diagnostic.endsWith('decisive error at tail'));
+  console.log('Validated PowerShell error normalization, strict refusal matching, and bounded diagnostics.');
+}
+
+await testErrorOutput();
+if (process.argv.includes('--test-error-output')) process.exit(0);
 
 let shell;
 for (const executable of ['pwsh', 'powershell']) {
@@ -258,15 +298,6 @@ try {
   if (await readFile(path.join(ownAgents, 'AGENTS.md'), 'utf8') !== '# Project rules\n') throw new Error('normal install modified an existing AGENTS.md');
   const shellArgs = (project, extraArgs) => ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', project, ...extraArgs];
   const runUpdate = (project, extraArgs = [], options = {}) => execFileAsync(shell, shellArgs(project, ['-UpdatePolicies', ...extraArgs]), options);
-  // Asserts the invocation fails for the EXPECTED reason (message), not merely with some non-zero exit.
-  async function failsWith(promise, pattern, label) {
-    try { await promise; } catch (error) {
-      const output = `${error.stdout ?? ''}${error.stderr ?? ''}${error.message ?? ''}`;
-      if (!pattern.test(output)) throw new Error(`${label}: failed for an unexpected reason: ${output.slice(0, 400)}`);
-      return;
-    }
-    throw new Error(`${label}: unexpectedly succeeded`);
-  }
   // PATH without any directory that provides node, to prove which install paths genuinely need Node.
   const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
   const nodeFree = { env: { ...process.env, [pathKey]: (process.env[pathKey] ?? '').split(path.delimiter).filter((dir) => dir && !['node.exe', 'node'].some((name) => existsSync(path.join(dir, name)))).join(path.delimiter) } };
