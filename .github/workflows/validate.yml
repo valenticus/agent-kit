@@ -1,0 +1,90 @@
+name: Validate Agent Kit
+
+'on':
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Environment preflight
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 7) {
+            throw 'PowerShell 7 is required'
+          }
+          node -e "if (process.versions.node.split('.')[0] !== '24') process.exit(1); console.log(JSON.stringify({os: require('node:os').type(), release: require('node:os').release(), architecture: process.arch, node: process.version}))"
+          if ($LASTEXITCODE -ne 0) { throw 'Node.js 24 preflight failed' }
+          Write-Output "PowerShell executable: $((Get-Command pwsh).Source); version: $($PSVersionTable.PSVersion)"
+          git --version
+          if ($LASTEXITCODE -ne 0) { throw 'Git preflight failed' }
+          if ($IsMacOS) {
+            $canonicalTemp = node -p "require('node:fs').realpathSync(process.env.RUNNER_TEMP)"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve runner temporary directory' }
+            foreach ($variable in @('TMPDIR', 'TMP', 'TEMP')) {
+              "$variable=$canonicalTemp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            }
+          }
+
+      - name: Validate security-audit package and fixtures
+        run: node scripts/validation/validate-security-audit.mjs --fixtures
+
+      - name: Validate kit
+        run: node scripts/validation/validate-kit.mjs
+
+      - name: Validate policy
+        run: node scripts/validation/validate-policy.mjs
+
+      - name: Validate Claude adapter
+        run: node scripts/validation/validate-claude.mjs
+
+      - name: Validate data visualization
+        run: node scripts/validation/validate-data-visualization.mjs
+
+      - name: Validate installer
+        run: node scripts/validation/validate-installer.mjs
+
+      - name: Check Git whitespace and working tree
+        if: always()
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Working-tree whitespace check failed' }
+          git show --format= --check HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Commit whitespace check failed' }
+          $status = git status --porcelain=v1 --untracked-files=all
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect working tree' }
+          if ($status) {
+            $status | Write-Output
+            throw 'Validation modified the checkout'
+          }

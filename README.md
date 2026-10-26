@@ -29,6 +29,12 @@ Activate it only by explicitly asking to use `security-audit`, for example: "Use
 
 Maintainers can run `node scripts/validation/validate-security-audit.mjs --fixtures` for local package/provenance and disposable copy/mirror checks and `node scripts/validation/validate-installer.mjs` for real disposable installation checks (requires `powershell` or `pwsh`). Copy fixtures do not substitute for the PowerShell installer suite. These checks do not run agents or establish behavioral compliance.
 
+## Cross-platform CI
+
+[Validate Agent Kit](.github/workflows/validate.yml) runs on pushes to `main`, pull requests targeting `main`, and manual dispatch. Both `windows-latest` and `macos-latest` use Node.js 24 and PowerShell 7 with a 15-minute job limit. Each validator runs separately: `validate-security-audit.mjs --fixtures`, `validate-kit.mjs`, `validate-policy.mjs`, `validate-claude.mjs`, `validate-data-visualization.mjs`, and `validate-installer.mjs`. Git checks verify whitespace and that tests leave the checkout clean.
+
+The suites use disposable fixtures for default/explicit optional installation, Cline mirror parity, overwrite refusal, native Windows junctions, and macOS symlinks. No agent sessions, repository secrets, package installation/cache, global Agent Kit installation, deployment, publishing, or artifact uploads are involved. Checkout and Node setup require network access. `windows-latest` is a Windows Server runner, so CI does not replace a Windows 11 validation pass. Local equivalents are the same `node scripts/validation/<script>` commands; the installer suite requires `pwsh` (preferred) or `powershell`. macOS CI resolves its temporary directory to a canonical path before fixture tests.
+
 ## Canonical source-of-truth model
 
 ```text
