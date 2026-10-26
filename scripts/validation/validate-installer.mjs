@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { testSkillApply } from './skill-apply-tests.mjs';
 import { testSkillCatalogAndPlanner } from './skill-update-tests.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -64,6 +65,7 @@ async function testErrorOutput() {
 await testErrorOutput();
 if (process.argv.includes('--test-error-output')) process.exit(0);
 await testSkillCatalogAndPlanner();
+await testSkillApply();
 
 let shell;
 for (const executable of ['pwsh', 'powershell']) {

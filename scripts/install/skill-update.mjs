@@ -13,6 +13,9 @@ import { currentVersion, loadCatalog, normalizedHash } from './skill-catalog.mjs
 
 const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const LOCATIONS = ['.agents/skills', '.cline/skills'];
+// Written only by skill-apply.mjs; their presence means an update is running or was interrupted.
+export const LOCK_NAME = '.agent-kit-update.lock';
+export const STAGING_NAME = '.agent-kit-update';
 // Operating-system metadata files are still extra files (never ignored), but conflicts name them.
 const OS_METADATA = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
@@ -146,6 +149,13 @@ export function planSkillUpdate(projectRoot, { kitRoot: root = kitRoot, skills, 
       plan.entries.push({ skill: item.name, kind: entry.kind, location, targetReleases: target.releases, ...inspectSkill(fsImpl, path.join(absolute, item.name), entry, target) });
     }
     present.set(location, new Set(names));
+  }
+
+  if (lstatOrNull(fsImpl, path.join(project, LOCK_NAME))) {
+    plan.blockers.push(`${LOCK_NAME} exists: a skill update is running or was interrupted. If none is running, run: node scripts/install/skill-apply.mjs recover --project <project>`);
+  }
+  for (const parent of ['.agents', '.cline']) {
+    if (lstatOrNull(fsImpl, path.join(project, parent, STAGING_NAME))) plan.blockers.push(`${parent}/${STAGING_NAME} exists: leftovers of an earlier skill update; recover or review them first.`);
   }
 
   if (present.has('.agents/skills') && present.has('.cline/skills')) {
