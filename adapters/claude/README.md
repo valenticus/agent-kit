@@ -38,10 +38,12 @@ The hook is `node "$CLAUDE_PROJECT_DIR/.claude/agent-kit/claude-bootstrap.mjs"`.
 Nothing is overwritten or deleted; the installer validates everything before writing and refuses with an actionable message.
 
 - `CLAUDE.md`: absent → created. Present with an `@AGENTS.md` line → left as is. Otherwise refused; add the import manually.
-- `.claude/settings.json`: absent → created. Present strict JSON → the hook is appended to `hooks.SessionStart`, other keys, hooks, and indentation preserved, and re-installs never duplicate it. Comments, trailing commas, or an unexpected shape (`hooks` not an object, `SessionStart` not an array) are refused with the exact hook to add manually. A rewrite re-serializes the JSON file.
+- `.claude/settings.json`: absent → created. Present strict JSON → the hook is appended to `hooks.SessionStart`, other keys, hooks, indentation, line endings, and a UTF-8 BOM preserved, and re-installs never duplicate it. Comments, trailing commas, or an unexpected shape (`hooks` not an object, `SessionStart` not an array) are refused with the exact hook to add manually. A rewrite re-serializes the JSON file.
 - `.claude/agent-kit/claude-bootstrap.mjs`: identical → no-op; different → refused.
 - `.claude/skills`: correct link → no-op; wrong or broken link, real directory, or ordinary file → refused (the bootstrap fails with exit code 2 and a stderr diagnostic, leaving the path untouched). Recursive copy is never a fallback.
 - `.agents/skills` missing → refused; no broken adapter is created.
+
+An unexpected write error after these checks (for example a full disk) can stop the install part-way, such as after the bootstrap copy but before `.claude/settings.json` gains the hook. That state is inert: the bootstrap runs only from the hook, and a failed settings write leaves the original file unchanged. `validate-install.mjs` reports the incomplete adapter. Complete it with `install.ps1 -ProjectRoot <project> -Tools claude -NoSkills`, which reuses the existing `.agents/skills` and overwrites nothing; repeating the original command with `-Skills` is refused because those skills already exist.
 
 ## Trust
 
