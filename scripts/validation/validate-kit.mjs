@@ -42,7 +42,7 @@ for (const name of expectedOptional) {
 const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs','scripts/install/policy-block.mjs','scripts/validation/validate-policy.mjs'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
-if (version !== '1.7.0') errors.push(`unexpected VERSION ${version}`);
+if (version !== '1.8.0') errors.push(`unexpected VERSION ${version}`);
 const hasUkrainianCommunicationPolicy = (text) => [
   /## Communication language/i,
   /Ukrainian by default/i,
