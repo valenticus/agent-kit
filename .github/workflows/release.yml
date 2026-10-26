@@ -1,0 +1,278 @@
+name: Release Agent Kit
+
+'on':
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable release tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      release_sha:
+        description: Full commit SHA of the current main HEAD
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: agent-kit-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.repository == 'valenticus/agent-kit' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      fingerprint: ${{ steps.gate.outputs.fingerprint }}
+    steps:
+      - name: Check release gates (read-only)
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_MODE: preflight
+        run: &release_program |
+          python3 - <<'PY'
+          import base64
+          import datetime
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          REPO = 'valenticus/agent-kit'
+          VALIDATORS = (
+              'Validate security-audit package and fixtures', 'Validate kit',
+              'Validate policy', 'Validate Claude adapter',
+              'Validate data visualization', 'Validate installer',
+          )
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          class API:
+              def __init__(self, token):
+                  self.token = token
+                  self.opener = urllib.request.build_opener(NoRedirect)
+
+              def request(self, path, body=None, missing=False):
+                  require(path.startswith('/') and not path.startswith('//'), 'Invalid API path')
+                  request = urllib.request.Request(
+                      'https://api.github.com/repos/' + REPO + path,
+                      data=None if body is None else json.dumps(body).encode(),
+                      headers={'Authorization': 'Bearer ' + self.token,
+                               'Accept': 'application/vnd.github+json',
+                               'X-GitHub-Api-Version': '2022-11-28',
+                               'Content-Type': 'application/json',
+                               'User-Agent': 'agent-kit-release'},
+                      method='GET' if body is None else 'POST')
+                  try:
+                      with self.opener.open(request, timeout=30) as response:
+                          require(response.status == (200 if body is None else 201), 'Unexpected API status')
+                          raw = response.read(5 * 1024 * 1024 + 1)
+                          require(len(raw) <= 5 * 1024 * 1024, 'API response exceeds size limit')
+                          return json.loads(raw)
+                  except urllib.error.HTTPError as error:
+                      if missing and body is None and error.code == 404:
+                          return None
+                      raise RuntimeError('GitHub API HTTP ' + str(error.code)) from None
+                  except urllib.error.URLError:
+                      raise RuntimeError('GitHub API transport failure; mutation outcome may be unknown') from None
+
+              def pages(self, path, key):
+                  result = []
+                  separator = '&' if '?' in path else '?'
+                  for page in range(1, 11):
+                      data = self.request(path + separator + 'per_page=100&page=' + str(page))
+                      entries = data[key]
+                      require(isinstance(entries, list), 'Invalid API collection')
+                      result.extend(entries)
+                      if len(entries) < 100:
+                          return result
+                  raise RuntimeError('Pagination limit reached; evidence is incomplete')
+
+          def read_text(api, path, sha):
+              data = api.request('/contents/' + path + '?ref=' + sha)
+              require(data.get('type') == 'file' and data.get('encoding') == 'base64', 'Missing source file')
+              require(data.get('size', 10**9) <= 100000, 'Source file exceeds size limit')
+              return base64.b64decode(data['content']).decode('utf-8')
+
+          def main_head(api, sha):
+              ref = api.request('/git/ref/heads/main')
+              require(ref['object']['type'] == 'commit' and ref['object']['sha'] == sha,
+                      'Release SHA is no longer the current main HEAD')
+
+          def ci_evidence(api, sha):
+              workflow = api.request('/actions/workflows/validate.yml')
+              require(workflow['path'] == '.github/workflows/validate.yml' and
+                      workflow['state'] == 'active', 'Validation workflow is not active at the expected path')
+              runs = api.pages('/actions/workflows/' + str(workflow['id']) +
+                               '/runs?event=push&branch=main&head_sha=' + sha, 'workflow_runs')
+              runs = [run for run in runs if run.get('head_sha') == sha and
+                      run.get('event') == 'push' and run.get('head_branch') == 'main' and
+                      run.get('workflow_id') == workflow['id']]
+              require(bool(runs), 'No exact-SHA push validation evidence')
+              newest = max(runs, key=lambda run: run['id'])
+              run = api.request('/actions/runs/' + str(newest['id']))
+              require(run['head_sha'] == sha and run['workflow_id'] == workflow['id'] and
+                      run['event'] == 'push' and run['head_branch'] == 'main' and
+                      run['status'] == 'completed' and run['conclusion'] == 'success',
+                      'Latest validation run is not a completed success for this SHA')
+              attempt = run['run_attempt']
+              require(isinstance(attempt, int) and attempt >= 1, 'Invalid validation attempt')
+              jobs = api.pages('/actions/runs/' + str(run['id']) + '/attempts/' + str(attempt) + '/jobs', 'jobs')
+              expected = {'Validate (macos-latest)', 'Validate (windows-latest)'}
+              require(len(jobs) == 2 and {job['name'] for job in jobs} == expected,
+                      'Both expected matrix jobs are required without duplicates')
+              for job in jobs:
+                  require(job['status'] == 'completed' and job['conclusion'] == 'success', 'Matrix job did not pass')
+                  for name in VALIDATORS + ('Environment preflight', 'Check Git whitespace and working tree'):
+                      steps = [step for step in job['steps'] if step['name'] == name]
+                      require(len(steps) == 1 and steps[0]['status'] == 'completed' and
+                              steps[0]['conclusion'] == 'success', 'Required validation step is missing or did not pass: ' + name)
+              current = api.request('/actions/runs/' + str(run['id']))
+              require(current['run_attempt'] == attempt and current['status'] == 'completed' and
+                      current['conclusion'] == 'success', 'Validation attempt changed during inspection')
+              return {'run_id': run['id'], 'attempt': attempt}
+
+          def preflight(api, env):
+              tag, sha = env['RELEASE_TAG'], env['RELEASE_SHA']
+              require(re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag), 'Invalid stable SemVer tag')
+              require(re.fullmatch(r'[0-9a-f]{40}', sha), 'Release SHA must be 40 lowercase hexadecimal characters')
+              require(env['GITHUB_REPOSITORY'] == REPO and env['GITHUB_REF'] == 'refs/heads/main' and
+                      env['GITHUB_EVENT_NAME'] == 'workflow_dispatch' and env['GITHUB_SHA'] == sha,
+                      'Dispatch must target this repository and the exact release commit on main')
+              main_head(api, sha)
+              require(read_text(api, 'VERSION', sha).strip() == tag[1:], 'VERSION does not match requested tag')
+              notes = read_text(api, 'docs/release-' + tag + '.md', sha)
+              require(bool(notes.strip()), 'Release notes are empty')
+              require(api.request('/git/ref/tags/' + tag, missing=True) is None, 'Tag already exists; no overwrite or automatic recovery')
+              require(api.request('/releases/tags/' + tag, missing=True) is None, 'Release already exists; no overwrite')
+              commit = api.request('/commits/' + sha)
+              author = commit.get('author') or {}
+              tagger = commit['commit']['author']
+              require(commit['sha'] == sha and author.get('type') == 'User' and
+                      bool(author.get('login')) and not author['login'].endswith('[bot]'),
+                      'Release commit must have a GitHub-associated human author')
+              require(bool(tagger.get('name', '').strip()) and bool(tagger.get('email', '').strip()) and
+                      not re.search(r'(?i)\b(bot|codex|chatgpt|claude|openai|anthropic)\b', tagger['name'] + ' ' + tagger['email']),
+                      'Human tagger metadata is missing or identifies an agent/tool')
+              evidence = ci_evidence(api, sha)
+              fingerprint = hashlib.sha256(json.dumps(
+                  {'tag': tag, 'sha': sha, 'notes': notes, 'tagger': tagger, 'ci': evidence},
+                  sort_keys=True).encode()).hexdigest()
+              return tag, sha, notes, tagger, evidence, fingerprint
+
+          def verify_tag(api, tag, sha, object_sha):
+              ref = api.request('/git/ref/tags/' + tag)
+              require(ref['object']['type'] == 'tag' and ref['object']['sha'] == object_sha, 'Tag reference changed or is not annotated')
+              obj = api.request('/git/tags/' + object_sha)
+              require(obj['tag'] == tag and obj['object']['type'] == 'commit' and obj['object']['sha'] == sha,
+                      'Annotated tag does not point to the release commit')
+
+          def execute(api, env, summary):
+              tag, sha, notes, tagger, evidence, fingerprint = preflight(api, env)
+              if env['RELEASE_MODE'] == 'preflight':
+                  with open(env['GITHUB_OUTPUT'], 'a') as output:
+                      output.write('fingerprint=' + fingerprint + '\n')
+                  summary('Preflight PASS for ' + tag + ' at ' + sha + '; validation run ' + str(evidence['run_id']))
+                  return
+              require(env['RELEASE_MODE'] == 'publish' and env.get('EXPECTED_FINGERPRINT') == fingerprint,
+                      'Release evidence changed since read-only preflight')
+              # Refresh critical evidence immediately before the first write.
+              main_head(api, sha)
+              require(ci_evidence(api, sha) == evidence, 'Validation evidence changed before mutation')
+              state = 'No tag reference or Release has been confirmed.'
+              try:
+                  state = 'Tag object POST attempted; outcome may be unknown.'
+                  summary(state + '\n\nTarget: ' + tag + ' at ' + sha)
+                  obj = api.request('/git/tags', {'tag': tag, 'message': 'Agent Kit ' + tag,
+                      'object': sha, 'type': 'commit', 'tagger': {
+                          'name': tagger['name'], 'email': tagger['email'],
+                          'date': datetime.datetime.now(datetime.timezone.utc).isoformat()}})
+                  object_sha = obj['sha']
+                  require(re.fullmatch(r'[0-9a-f]{40}', object_sha), 'Invalid tag object response')
+                  state = 'Annotated tag object ' + object_sha + ' created; no tag reference confirmed.'
+                  summary(state)
+                  main_head(api, sha)
+                  require(ci_evidence(api, sha) == evidence, 'Validation evidence changed before tag reference creation')
+                  state = 'Annotated tag object ' + object_sha + ' created; tag reference POST attempted.'
+                  summary(state)
+                  api.request('/git/refs', {'ref': 'refs/tags/' + tag, 'sha': object_sha})
+                  verify_tag(api, tag, sha, object_sha)
+                  state = 'Tag ' + tag + ' verified at ' + sha + '; no Release confirmed.'
+                  summary(state)
+                  # No automatic retries, tag deletion, ref updates, or release edits.
+                  main_head(api, sha)
+                  require(ci_evidence(api, sha) == evidence, 'Validation evidence changed before Release creation')
+                  state = 'Tag ' + tag + ' verified at ' + sha + '; Release POST attempted.'
+                  summary(state)
+                  created = api.request('/releases', {'tag_name': tag, 'target_commitish': sha,
+                      'name': 'Agent Kit ' + tag, 'body': notes, 'draft': False,
+                      'prerelease': False, 'generate_release_notes': False})
+                  published = api.request('/releases/tags/' + tag)
+                  require(created['id'] == published['id'] and published['tag_name'] == tag and
+                          published['draft'] is False and published['prerelease'] is False and
+                          published.get('published_at'), 'Published Release could not be verified')
+                  verify_tag(api, tag, sha, object_sha)
+                  summary('Release PASS: https://github.com/' + REPO + '/releases/tag/' + tag +
+                          '\n\nCommit: ' + sha + '\n\nAnnotated tag object: ' + object_sha)
+              except Exception:
+                  summary('PARTIAL/UNKNOWN: ' + state + '\n\nStop. Inspect the tag and Release through GitHub before any separately approved recovery. Do not rerun POST, overwrite, or delete automatically.')
+                  # Read-only reconciliation after an ambiguous mutation; never resume writes.
+                  for path in ('/git/ref/tags/' + tag, '/releases/tags/' + tag):
+                      try:
+                          observed = api.request(path, missing=True)
+                          summary('Reconciliation ' + path + ': ' + ('present' if observed else 'absent'))
+                      except Exception:
+                          summary('Reconciliation ' + path + ': UNKNOWN')
+                  raise
+
+          def summary(message):
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+                  output.write(message + '\n\n')
+
+          if __name__ == '__main__':
+              try:
+                  execute(API(os.environ['GH_TOKEN']), os.environ, summary)
+              except Exception as error:
+                  # Never print request headers, credentials, or raw HTTP response bodies.
+                  message = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+                  summary('BLOCKED/FAIL: ' + message)
+                  print('Release blocked: ' + message, file=sys.stderr)
+                  sys.exit(1)
+          PY
+
+  release:
+    needs: preflight
+    if: github.repository == 'valenticus/agent-kit' && github.ref == 'refs/heads/main' && needs.preflight.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Recheck gates and publish (create-only)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_MODE: publish
+          EXPECTED_FINGERPRINT: ${{ needs.preflight.outputs.fingerprint }}
+        run: *release_program

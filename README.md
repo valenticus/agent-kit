@@ -35,6 +35,8 @@ Maintainers can run `node scripts/validation/validate-security-audit.mjs --fixtu
 
 The suites use disposable fixtures for default/explicit optional installation, Cline mirror parity, overwrite refusal, native Windows junctions, and macOS symlinks. No agent sessions, repository secrets, package installation/cache, global Agent Kit installation, deployment, publishing, or artifact uploads are involved. Checkout and Node setup require network access. `windows-latest` is a Windows Server runner, so CI does not replace a Windows 11 validation pass. Local equivalents are the same `node scripts/validation/<script>` commands; the installer suite requires `pwsh` (preferred) or `powershell`. macOS CI resolves its temporary directory to a canonical path before fixture tests.
 
+Stable GitHub Releases use a separate explicitly dispatched workflow with exact-commit CI gates and create-only publication. See the [manual release process](docs/releasing.md); adding the workflow does not publish a release.
+
 ## Canonical source-of-truth model
 
 ```text
