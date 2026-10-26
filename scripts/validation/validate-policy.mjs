@@ -232,6 +232,25 @@ try {
       assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(before));
     }
   });
+  check('an existing file at the temp path is never deleted; the temp file this call created is still cleaned up', () => {
+    const realNow = Date.now;
+    Date.now = () => 12345;
+    try {
+      const tempName = `AGENTS.md.agent-kit-${process.pid}-12345.tmp`;
+      const dir = project('# Mine\n');
+      fs.writeFileSync(path.join(dir, tempName), 'not ours');
+      assert.throws(() => update(dir), /EEXIST/);
+      assert.equal(fs.readFileSync(path.join(dir, tempName), 'utf8'), 'not ours', 'foreign file kept');
+      assert.equal(read(dir), '# Mine\n', 'original unchanged');
+      for (const failing of ['writeFileSync', 'renameSync']) {
+        const own = project('# Mine\n');
+        const impl = { ...fs, [failing]: (...args) => { if (failing === 'writeFileSync') fs.writeFileSync(...args); throw new Error(`injected ${failing} failure`); } };
+        assert.throws(() => update(own, undefined, { fsImpl: impl }), new RegExp(`injected ${failing} failure`));
+        assert.deepEqual(fs.readdirSync(own), ['AGENTS.md'], `${failing}: own temp file removed`);
+        assert.equal(read(own), '# Mine\n');
+      }
+    } finally { Date.now = realNow; }
+  });
   // validate-install policy reporting: warn on missing/stale policy, pass cleanly when current, fail on malformed markers.
   const installValidator = path.join(root, 'scripts', 'validation', 'validate-install.mjs');
   const installedProject = (agents) => {

@@ -191,14 +191,19 @@ export function update(projectRoot, root = kitRoot, { fsImpl = fs } = {}) {
   const plan = planUpdate(target.text, root);
   if (plan.action === 'noop') return plan.action;
   const data = Buffer.concat([target.bom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0), Buffer.from(plan.content, 'utf8')]);
-  // Temp file beside the real target (same filesystem); always removed, and the original failure is never masked.
+  // Temp file beside the real target (same filesystem), created exclusively. It is removed on failure only if this call
+  // created it, so an existing file of the same name is never deleted; the original failure is never masked.
   const temp = path.join(path.dirname(target.real), `${path.basename(target.real)}.agent-kit-${process.pid}-${Date.now()}.tmp`);
+  let created = false;
   try {
-    fsImpl.writeFileSync(temp, data, { flag: 'wx' });
+    const fd = fsImpl.openSync(temp, 'wx');
+    created = true;
+    try { fsImpl.writeFileSync(fd, data); } finally { fsImpl.closeSync(fd); }
     if (target.mode !== undefined) fsImpl.chmodSync(temp, target.mode);
     fsImpl.renameSync(temp, target.real);
+    created = false;
   } finally {
-    try { fsImpl.unlinkSync(temp); } catch { /* already renamed or never created */ }
+    if (created) try { fsImpl.unlinkSync(temp); } catch { /* already gone */ }
   }
   return plan.action;
 }
