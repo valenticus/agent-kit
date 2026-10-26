@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -78,6 +78,20 @@ if (!shell) {
   console.error('BLOCKED: installer validation requires pwsh (PowerShell 7) or powershell (Windows PowerShell); neither executable was found.');
   process.exit(1);
 }
+// Pin the executable found on PATH to its absolute path, so the node-free PATH used below can never hide PowerShell
+// (MacPorts, for example, installs node and pwsh in the same directory).
+function resolveOnPath(name) {
+  const extensions = process.platform === 'win32' ? ['', ...(process.env.PATHEXT ?? '.EXE').split(';').filter(Boolean)] : [''];
+  for (const dir of (process.env[Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'] ?? '').split(path.delimiter)) {
+    for (const extension of extensions) {
+      const candidate = path.join(dir, `${name}${extension}`);
+      try { if (statSync(candidate).isFile()) return candidate; } catch { /* not here */ }
+    }
+  }
+  return null;
+}
+shell = resolveOnPath(shell) ?? shell;
+console.log(`PowerShell path: ${shell}`);
 const workspace = await mkdtemp(path.join(tmpdir(), 'agent-kit-copilot-'));
 
 // skills === null selects the explicit -NoSkills switch instead of -Skills.
@@ -161,6 +175,21 @@ try {
     if (!canonicalHandoff.equals(await readFile(path.join(handoffProject, relative)))) throw new Error(`handoff: ${relative} differs from the canonical skill`);
   }
   if ((await readdir(path.join(handoffProject, '.agents', 'skills'))).join() !== 'handoff') throw new Error('handoff: explicit selection installed other skills');
+
+  // validate-install must notice a Cline mirror that lacks a kit skill present in .agents/skills (here: handoff added
+  // without -Tools cline), and accept project-owned skills that the kit does not distribute.
+  const partialMirror = path.join(workspace, 'partial-cline-mirror');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(partialMirror));
+  await runInstall(partialMirror, ['codex', 'cline']);
+  await runInstall(partialMirror, ['codex'], [], 'handoff');
+  const partialBefore = await snapshot(partialMirror);
+  await failsWith(execFileAsync(process.execPath, [installValidator, partialMirror]), /\.cline\/skills lacks Agent Kit skills present in \.agents\/skills: handoff/, 'partial Cline mirror');
+  if (await snapshot(partialMirror) !== partialBefore) throw new Error('validate-install modified the project');
+  await runInstall(partialMirror, ['cline'], [], 'handoff');
+  const { mkdir: makeDir, writeFile: writeText } = await import('node:fs/promises');
+  await makeDir(path.join(partialMirror, '.agents', 'skills', 'project-only'));
+  await writeText(path.join(partialMirror, '.agents', 'skills', 'project-only', 'SKILL.md'), '---\nname: project-only\ndescription: x\n---\n');
+  await execFileAsync(process.execPath, [installValidator, partialMirror]);
 
   // Claude adapter: opt-in, reuses the single .agents/skills materialization, never overwrites, and is idempotent when re-applied.
   const claudeOnly = path.join(workspace, 'claude-only');

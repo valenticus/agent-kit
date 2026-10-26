@@ -9,7 +9,9 @@ import { ensureSkillsLink, inspectSkillsLink, POSIX_LINK_TARGET } from '../../ad
 import { BOOTSTRAP_RELATIVE, HOOK_COMMAND, install, isAgentKitHook, planSettings } from '../install/claude-adapter.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const workspace = fs.mkdtempSync(path.join(tmpdir(), 'agent-kit-claude-'));
+// Canonical path: on macOS the default temp directory is reached through the /var -> /private/var link, and the mocked
+// junction below reports the link target in canonical form.
+const workspace = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'agent-kit-claude-')));
 const posix = process.platform !== 'win32';
 let counter = 0;
 let checks = 0;
@@ -239,6 +241,45 @@ try {
       assert.ok(!fs.existsSync(path.join(dir, BOOTSTRAP_RELATIVE)), 'refusal must happen before any write');
     }
     assert.throws(() => planSettings('{"a":1,}'));
+  });
+  check('settings: a UTF-8 BOM, CRLF, indentation, and keys survive the merge; idempotent', () => {
+    const dir = project();
+    const original = `﻿${JSON.stringify({ model: 'x', permissions: { allow: ['Bash(ls)'] } }, null, 4).replace(/\n/g, '\r\n')}\r\n`;
+    write(dir, '.claude/settings.json', original);
+    install(dir);
+    const merged = read(dir, '.claude/settings.json');
+    assert.ok(merged.startsWith('﻿') && !merged.startsWith('﻿﻿'), 'single BOM kept');
+    assert.ok(!/(^|[^\r])\n/.test(merged), 'CRLF kept');
+    assert.ok(merged.includes('\r\n    "model"'), 'indentation kept');
+    const parsed = JSON.parse(merged.slice(1));
+    assert.equal(parsed.model, 'x');
+    assert.deepEqual(parsed.permissions, { allow: ['Bash(ls)'] });
+    assert.equal(hookCount(parsed), 1);
+    install(dir);
+    assert.equal(read(dir, '.claude/settings.json'), merged, 'second install is byte-identical');
+    assert.ok(!planSettings(`{\n  "a": 1\n}\n`).content.startsWith('﻿'), 'no BOM is added to a file without one');
+  });
+  check('settings: a failed write or rename keeps the original, removes only its own temp file, and never touches other files', () => {
+    // The bootstrap copy is written before settings.json; only settings temp files are checked here.
+    const settingsDir = (dir) => fs.readdirSync(path.join(dir, '.claude')).filter((name) => name.startsWith('settings.json')).sort();
+    for (const failing of ['writeFileSync', 'renameSync']) {
+      const dir = project();
+      const original = '{\n  "model": "x"\n}\n';
+      write(dir, '.claude/settings.json', original);
+      write(dir, '.claude/settings.json.agent-kit-tmp', 'not ours');
+      const fsImpl = { ...fs, [failing]: (...args) => { if (failing === 'writeFileSync' && typeof args[0] !== 'number') return fs.writeFileSync(...args); throw new Error(`injected ${failing} failure`); } };
+      assert.throws(() => install(dir, { fsImpl }), new RegExp(`injected ${failing} failure`));
+      assert.equal(read(dir, '.claude/settings.json'), original, `${failing}: original unchanged`);
+      assert.equal(read(dir, '.claude/settings.json.agent-kit-tmp'), 'not ours', `${failing}: unrelated file untouched`);
+      assert.deepEqual(settingsDir(dir), ['settings.json', 'settings.json.agent-kit-tmp'], `${failing}: no leftover temp file`);
+    }
+    const dir = project();
+    write(dir, '.claude/settings.json', '{}\n');
+    let unlinked = 0;
+    const exists = { ...fs, openSync: () => { throw Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }); }, unlinkSync: () => { unlinked++; } };
+    assert.throws(() => install(dir, { fsImpl: exists }), /EEXIST/);
+    assert.equal(unlinked, 0, 'a temp file this call did not create is never removed');
+    assert.equal(read(dir, '.claude/settings.json'), '{}\n');
   });
 
   // F. .gitignore (real git)

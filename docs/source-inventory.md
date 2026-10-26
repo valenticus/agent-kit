@@ -24,6 +24,8 @@ Current Agent Kit additions that were independently authored after the initial s
 | Source | System | Purpose | Canonical/mirror | Classification | Dependencies |
 |---|---|---|---|---|---|
 | `core/skills/data-visualization` | shared | Question-first visualization decisions, truthfulness, composition, interaction, responsive behavior, accessibility, and QA | canonical opt-in core | original universal | project data semantics and UI realization |
+| `core/skills/handoff` | shared | Prepare and resume verifiable handoffs of unfinished work between sessions and agents | canonical opt-in core | original universal | Git, project rules |
+| `scripts/install/policy-block.mjs` and the `destructive-operations` and `multi-agent` managed blocks in `templates/project-rules/AGENTS.md` | shared | Named managed policy blocks in `AGENTS.md`; destructive-operation approval and multi-agent isolation rules | canonical | original universal | Node.js for `-UpdatePolicies` |
 | `adapters/claude/claude-bootstrap.mjs`, `scripts/install/claude-adapter.mjs` | Claude Code | Generated `.claude/skills` link, `CLAUDE.md` bridge, settings hook merge, gitignore entry | adapter | original universal mechanism | Node.js, `AGENTS.md`, `.agents/skills` |
 
 The eight Cline copies were verified identical to their `.agents` counterparts. Vendor skills were intentionally not mirrored. Product names, financial rules, tables/RPCs, brand tokens, components, locale details, and screen names were excluded from active universal behavior and replaced with project hooks.
@@ -33,5 +35,7 @@ In Agent Kit v1.1.0, Supabase/Postgres and Web Design are optional vendored modu
 Copilot consumes the canonical project `.agents/skills` materialization directly, so no `.github/skills` mirror is maintained. The Copilot bridge and optional auditor are the only Copilot-specific adapter files.
 
 `optional/vendored/security-audit` is an adapted third-party optional module from Cloudflare security-audit-skill commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` (MIT). Its canonical package includes SKILL.md, two local review/report references, UPSTREAM.md, the complete license, and explicit-only Codex invocation metadata. It depends only on permitted local source reading/search during use; it ships no execution helpers or upstream validators. The maintainer structural validator is outside the distributed package. Source mapping and adaptation version are recorded in [UPSTREAM.md](../optional/vendored/security-audit/UPSTREAM.md). It uses existing approved optional distribution and is never selected by default.
+
+The v1.9.0 handoff skill, the generalized managed-policy mechanism, and the destructive-operations and multi-agent policies were written for Agent Kit. The need for them was identified while reviewing the third-party IT-Shelter-Labs/Claude-Mods repository, whose license could not be established; no code or text from that repository was used.
 
 The `data-visualization` skill was independently authored. External chart research was treated only as evidence; no third-party chart taxonomy, wording, templates, visual system, code, examples, validator, screenshots, or assets were incorporated.

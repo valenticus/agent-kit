@@ -243,7 +243,7 @@ if (behavioralTesting !== null) {
   const rows = behavioralTesting.split('\n').filter((line) => /^\s*\|/.test(line)).map(cells);
   const header = ['ID', 'Scenario', 'Decision', 'Type', 'When', 'Pass condition', 'Evidence status'];
   if (!rows.some((row) => row.join('|') === header.join('|'))) errors.push(`${behavioralTestingRel}: scenario catalog header not found`);
-  const scenarios = ['language-response', 'git-attribution', 'git-identity', 'dirty-tree', 'scope-control', 'skill-stacking', 'evidence-claim', 'debug-before-evidence', 'destructive-git', 'handoff-fidelity', 'adapter-inheritance'];
+  const scenarios = ['language-response', 'git-attribution', 'git-identity', 'dirty-tree', 'scope-control', 'skill-stacking', 'evidence-claim', 'debug-before-evidence', 'destructive-git', 'destructive-operations', 'parallel-writer', 'handoff-fidelity', 'adapter-inheritance'];
   const byId = new Map();
   for (const id of scenarios) {
     const matches = rows.filter((row) => row[0] === id);

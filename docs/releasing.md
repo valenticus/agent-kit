@@ -1,6 +1,6 @@
 # Manual release process
 
-The [Release Agent Kit workflow](../.github/workflows/release.yml) publishes stable releases only through manual `workflow_dispatch` on `main` in `valenticus/agent-kit`. Pushes and tags never trigger it. Adding this workflow does not prepare or publish v1.8.0.
+The [Release Agent Kit workflow](../.github/workflows/release.yml) publishes stable releases only through manual `workflow_dispatch` on `main` in `valenticus/agent-kit`. Pushes and tags never trigger it, so merging release preparation to `main` never publishes by itself.
 
 ## Prepare and dispatch
 

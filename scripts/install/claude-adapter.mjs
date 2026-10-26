@@ -43,7 +43,8 @@ export function planSettings(existing) {
   const manual = `Add a SessionStart command hook "${HOOK_COMMAND}" to .claude/settings.json manually.`;
   const entry = { hooks: [{ type: 'command', command: HOOK_COMMAND }] };
   if (existing === null) return { action: 'create', content: `${JSON.stringify({ hooks: { SessionStart: [entry] } }, null, 2)}\n` };
-  const text = existing.replace(/^﻿/, '');
+  const bom = existing.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const text = existing.slice(bom.length);
   let data;
   try { data = JSON.parse(text); } catch (error) { return refuse(`.claude/settings.json is not strict JSON (${error.message}); refusing to rewrite it. ${manual}`); }
   if (!isPlainObject(data)) return refuse(`.claude/settings.json is not a JSON object. ${manual}`);
@@ -56,7 +57,7 @@ export function planSettings(existing) {
   const indent = /^(\t+|[ ]+)"/m.exec(text)?.[1] ?? '  ';
   let content = `${JSON.stringify(data, null, indent)}\n`;
   if (text.includes('\r\n')) content = content.replace(/\n/g, '\r\n');
-  return { action: 'merge', content };
+  return { action: 'merge', content: `${bom}${content}` };
 }
 
 export function planGitignore(existing) {
@@ -92,7 +93,23 @@ export function preflight(projectRoot) {
   plan(path.resolve(projectRoot));
 }
 
-export function install(projectRoot) {
+// Replaces settings.json through a uniquely named temp file beside it. The temp file is created exclusively (never
+// replacing another file) and removed only if this call created it, so a failure leaves the original untouched.
+function replaceSettings(target, content, fsImpl) {
+  const temp = `${target}.agent-kit-${process.pid}-${Date.now()}.tmp`;
+  let created = false;
+  try {
+    const fd = fsImpl.openSync(temp, 'wx');
+    created = true;
+    try { fsImpl.writeFileSync(fd, content); } finally { fsImpl.closeSync(fd); }
+    fsImpl.renameSync(temp, target);
+    created = false;
+  } finally {
+    if (created) try { fsImpl.unlinkSync(temp); } catch { /* already gone */ }
+  }
+}
+
+export function install(projectRoot, { fsImpl = fs } = {}) {
   const project = path.resolve(projectRoot);
   const steps = plan(project);
   // Check the canonical skills before writing anything so a broken adapter is never created.
@@ -107,9 +124,7 @@ export function install(projectRoot) {
   if (steps.settings.action !== 'noop') {
     const target = path.join(project, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    const temp = `${target}.agent-kit-tmp`;
-    fs.writeFileSync(temp, steps.settings.content);
-    fs.renameSync(temp, target);
+    replaceSettings(target, steps.settings.content, fsImpl);
     report.push(`${steps.settings.action === 'create' ? 'created' : 'merged SessionStart hook into'} .claude/settings.json`);
   }
   if (steps.claudeMd.action === 'create') { write('CLAUDE.md', steps.claudeMd.content, 'wx'); report.push('created CLAUDE.md'); }

@@ -39,6 +39,18 @@ try {
       }
       checked++;
     }
+    // Every skill the kit distributes (core or vendored optional) that is in .agents/skills must also be mirrored for
+    // Cline. Project-owned skills and referenced modules are installed outside the kit and are not required here.
+    const catalog = JSON.parse(await readFile(path.join(kitRoot, 'optional', 'catalog.json'), 'utf8'));
+    const distributed = new Set([
+      ...(await readdir(path.join(kitRoot, 'core', 'skills'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+      ...Object.entries(catalog).filter(([, module]) => module.kind === 'vendored').map(([name]) => name),
+    ]);
+    const missing = [];
+    for (const entry of await readdir(agents, { withFileTypes: true })) {
+      if (entry.isDirectory() && distributed.has(entry.name) && !await exists(path.join(cline, entry.name))) missing.push(entry.name);
+    }
+    if (missing.length) throw new Error(`.cline/skills lacks Agent Kit skills present in .agents/skills: ${missing.sort().join(', ')}; install them with -Tools cline`);
   }
   if (await exists(path.join(project, '.kilo', 'skills'))) throw new Error('unexpected .kilo/skills third mirror');
   if (await exists(path.join(project, '.github', 'skills'))) throw new Error('unexpected .github/skills Copilot mirror');

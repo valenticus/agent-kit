@@ -7,6 +7,10 @@ The compact design methodology was independently generalized from the source pro
 - Shin1122/Human-UI-Design-Skill: product-specific and anti-generic UI critique; no text vendored because a clear license was not established in the inspected source notes.
 - MaxMiksa/Auto-Company: conceptual separation of product, interaction, and UI roles.
 
+## Agent reliability components (v1.9.0)
+
+The `handoff` skill, the generalized managed-policy mechanism, and the destructive-operations and multi-agent policies were written for Agent Kit. A review of the third-party IT-Shelter-Labs/Claude-Mods repository, whose license could not be established, identified the need for them; no code or text from that repository was used, so it is a research reference only.
+
 ## Optional stack/vendor modules
 
 - `security-audit` adaptation v1.0.0 derives from Cloudflare's MIT-licensed [security-audit-skill](https://github.com/cloudflare/security-audit-skill/tree/c1c8a8c1471069fb0e188eeaff69b8e8db6564a8), pinned to commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8`. It preserves the complete `Copyright (c) 2025-2026 Cloudflare, Inc.` notice in [LICENSE](../optional/vendored/security-audit/LICENSE). It is adapted, not an unchanged vendor copy: source-only confirmation, explicit activation, a sequential pass, and Markdown coverage replace upstream execution, agents, and validators. [UPSTREAM.md](../optional/vendored/security-audit/UPSTREAM.md) maps sources and records semantic differences.
