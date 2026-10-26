@@ -192,6 +192,21 @@ export async function testSkillUpdateCli({ shell, failsWith }) {
       assert.match(stdout, /Not installed, so not added: handoff/);
       assert.deepEqual(fs.readdirSync(project), []);
     });
+    await check('install: skill names that are not plain names are refused before anything is written', async () => {
+      const project = path.join(workspace, 'names', 'nested project');
+      fs.mkdirSync(project, { recursive: true });
+      const before = snapshot(workspace);
+      for (const [args, pattern] of [
+        [['-Skills', '../../../kit'], /Invalid skill name: \.\.\/\.\.\/\.\.\/kit/],
+        [['-Skills', '..'], /Invalid skill name: \.\./],
+        [['-Skills', path.join(workspace, 'kit')], /Invalid skill name: /],
+        [['-Skills', 'safe-change/../../x'], /Invalid skill name: safe-change\/\.\.\/\.\.\/x/],
+        [['-Skills', 'nope'], /Unknown core skill: nope/],
+        [['-OptionalSkills', '../x'], /Invalid skill name: \.\.\/x/],
+        [['-OptionalSkills', 'not-a-module'], /Unknown optional skill: not-a-module/],
+      ]) await failsWith(run(project, '-Tools', 'codex', ...args), pattern, args.join(' '));
+      assert.equal(snapshot(workspace), before, 'nothing was written anywhere');
+    });
     await check('cli with the real kit: a fresh install is current and -DryRun writes nothing', async () => {
       const project = path.join(workspace, 'real kit');
       fs.mkdirSync(project);

@@ -73,7 +73,7 @@ export async function testSkillApply() {
   const STAGED = (from) => from.includes(`${path.sep}new${path.sep}`); // staging/new -> live
   const ROLLBACK = (from) => from.includes(`${path.sep}old${path.sep}`); // staging/old -> live
   // Runs an update in a child process that exits abruptly after the given fs call, like a crash or power loss.
-  // Modes: 'rename' (after N renames), 'open' (after opening the Nth staged file), 'unlink-old' (after deleting N
+  // Modes: 'before-rename' (just before the first rename), 'rename' (after N renames), 'open' (after opening the Nth staged file), 'unlink-old' (after deleting N
   // files of the previous copy), 'journal' (in the middle of writing the first journal).
   const crashScript = (mode, after, body) => `
       import fs from 'node:fs';
@@ -82,7 +82,7 @@ export async function testSkillApply() {
       const mode = ${JSON.stringify(mode)};
       let renames = 0, opens = 0, unlinks = 0;
       const fsImpl = { ...fs,
-        renameSync: (...args) => { fs.renameSync(...args); if (mode === 'rename' && ++renames === ${after}) process.exit(9); },
+        renameSync: (...args) => { if (mode === 'before-rename') process.exit(9); fs.renameSync(...args); if (mode === 'rename' && ++renames === ${after}) process.exit(9); },
         openSync: (...args) => { const fd = fs.openSync(...args); if (mode === 'open' && String(args[0]).includes(${JSON.stringify(`${path.sep}new${path.sep}`)}) && ++opens === ${after}) process.exit(9); return fd; },
         unlinkSync: (file) => { fs.unlinkSync(file); for (const [m, part] of [['unlink-old', 'old'], ['unlink-new', 'new']]) if (mode === m && String(file).includes(${JSON.stringify(path.sep)} + part + ${JSON.stringify(path.sep)}) && ++unlinks === ${after}) process.exit(9); },
         writeFileSync: (target, data, ...rest) => { if (mode === 'journal' && typeof target === 'number' && String(data).includes('"location"') && !String(data).includes('"pid"')) { fs.writeFileSync(target, String(data).slice(0, ${after})); process.exit(9); } return fs.writeFileSync(target, data, ...rest); } };
@@ -450,7 +450,7 @@ export async function testSkillApply() {
       crash(project, 'rename', 1);
       fs.rmdirSync(path.join(project, '.agents', 'skills'));
       link(victim, path.join(project, '.agents', 'skills'));
-      unchangedEverywhere(() => refuses(() => recover(project), /Refusing to write into \.agents\/skills: it is missing, a link or junction, or not a directory/));
+      unchangedEverywhere(() => refuses(() => recover(project), /Refusing to touch \.agents\/skills: \.agents\/skills is a link or junction/));
       assert.deepEqual(fs.readdirSync(victim), []);
     });
 
@@ -597,6 +597,99 @@ export async function testSkillApply() {
       assert.throws(() => apply(project), (error) => /not a complete Agent Kit lock\. It may belong to an update that is just starting/.test(error.message)
         && /remove it only after confirming that no Agent Kit update is running/.test(error.message) && !/Remove or rename it before updating/.test(error.message));
       assert.equal(fs.readFileSync(path.join(project, LOCK_NAME), 'utf8'), '');
+    });
+    // --- Links planted in staging or its parents (B1-bis): recovery must refuse and nothing may change anywhere. ---
+    const VICTIM = { 'SKILL.md': 'victim data, not Agent Kit\n', 'notes/old.md': 'victim notes\n' };
+    const crashFor = { restore: ['rename', 1], finish: ['rename', 2], discard: ['before-rename', 1] };
+    check('recover: a link in place of staging/old or staging/new is refused for restore, finish, and discard', () => {
+      for (const sub of ['old', 'new']) {
+        for (const [decision, [mode, after]] of Object.entries(crashFor)) {
+          const project = fresh('p');
+          writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+          crash(project, mode, after);
+          const victim = fresh('victim');
+          writeSkill(victim, '.', 'alpha', VICTIM);
+          const stage = stagingOf(project).stage;
+          fs.renameSync(path.join(stage, sub), path.join(fresh('moved'), sub));
+          link(victim, path.join(stage, sub));
+          editJson(journalOf(project), (journal) => { journal.entries[0][sub === 'old' ? 'from' : 'to'] = hashes(VICTIM); });
+          try {
+            unchangedEverywhere(() => refuses(() => recover(project), new RegExp(`\\.agents/\\.agent-kit-update/[0-9a-f-]+/${sub} is a link or junction`)));
+          } catch (error) { error.message = `${sub} link, ${decision}: ${error.message}`; throw error; }
+        }
+      }
+    });
+    check('recover: a link in place of the staged skill itself, the stage, or the .agents parent is refused', () => {
+      const cases = {
+        'staged old skill': (project, victim) => { const old = path.join(stagingOf(project).stage, 'old', 'alpha'); fs.renameSync(old, path.join(fresh('moved'), 'alpha')); link(path.join(victim, 'alpha'), old); },
+        'stage directory': (project, victim) => { const { stage } = stagingOf(project); const moved = path.join(fresh('moved'), 'stage'); fs.renameSync(stage, moved); link(moved, stage); void victim; },
+        '.agents parent': (project) => { const moved = path.join(fresh('moved'), '.agents'); fs.renameSync(path.join(project, '.agents'), moved); link(moved, path.join(project, '.agents')); },
+      };
+      for (const [name, plant] of Object.entries(cases)) {
+        for (const mode of ['rename', 'open']) {
+          const project = fresh('p');
+          writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+          crash(project, mode, 1);
+          const victim = fresh('victim');
+          writeSkill(victim, '.', 'alpha', VICTIM);
+          if (mode === 'open' && name === 'staged old skill') continue;
+          plant(project, victim);
+          try {
+            unchangedEverywhere(() => refuses(() => recover(project), /is a link or junction|unambiguously \(live, staged old, staged new: absent,unsafe,to\)/));
+          } catch (error) { error.message = `${name} (${mode}): ${error.message}`; throw error; }
+        }
+      }
+    });
+    check('apply: staging replaced by a link after it was created is never written through', () => {
+      for (const sub of ['old', 'new']) {
+        const project = fresh('p');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        const outside = fresh('outside');
+        let outsideBefore = null;
+        const onStep = (step, info) => {
+          if (step !== 'staged') return;
+          const stage = path.join(project, '.agents', STAGING_NAME, info.operation);
+          fs.renameSync(path.join(stage, sub), path.join(outside, sub));
+          link(path.join(outside, sub), path.join(stage, sub));
+          outsideBefore = contents(outside);
+        };
+        assert.throws(() => apply(project, { onStep }), (error) => error instanceof UpdateError && /is a link or junction/.test(error.message), sub);
+        assert.deepEqual(contents(outside), outsideBefore, `${sub}: nothing outside the project changed`);
+        assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1, `${sub}: the installed skill is intact`);
+      }
+    });
+
+    // --- Lock edge cases (L-A, L-B). ---
+    check('lock: a lock that disappears between lstat and read, or between attempts, is not reported as incomplete', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      let reads = 0;
+      let links = 0;
+      const fsImpl = {
+        ...fs,
+        readFileSync: (file, ...rest) => { if (String(file).endsWith(LOCK_NAME) && reads++ === 0) throw Object.assign(new Error('ENOENT: vanished'), { code: 'ENOENT' }); return fs.readFileSync(file, ...rest); },
+        lstatSync: (file, ...rest) => (String(file).endsWith(LOCK_NAME) && reads === 0 ? { isFile: () => true, isSymbolicLink: () => false, isDirectory: () => false } : fs.lstatSync(file, ...rest)),
+        linkSync: (from, to) => { if (links++ === 0) throw Object.assign(new Error('EEXIST: taken'), { code: 'EEXIST' }); return fs.linkSync(from, to); },
+      };
+      assert.equal(apply(project, { fsImpl }).updated.length, 1);
+      assert.ok(links >= 2, 'the lock was retried after the holder released it');
+      noLeftovers(project);
+    });
+    check('lock: a temporary lock file that cannot be removed stops the update cleanly and is named', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      const before = contents(path.join(project, '.agents'));
+      const stuck = { ...fs, unlinkSync: (file) => { if (String(file).endsWith('.tmp')) throw Object.assign(new Error('EPERM: held'), { code: 'EPERM' }); return fs.unlinkSync(file); } };
+      refuses(() => apply(project, { fsImpl: stuck }), /Could not remove the temporary lock file \.agent-kit-update\.lock\.[0-9a-f-]+\.tmp \(EPERM\); the update did not start and nothing else was changed/);
+      assert.ok(!fs.existsSync(path.join(project, LOCK_NAME)), 'no lock is left behind');
+      assert.deepEqual(contents(path.join(project, '.agents')), before);
+      const leftover = fs.readdirSync(project).filter((name) => name.endsWith('.tmp'));
+      assert.equal(leftover.length, 1);
+      fs.unlinkSync(path.join(project, leftover[0]));
+      let failures = 0;
+      const brief = { ...fs, unlinkSync: (file) => { if (String(file).endsWith('.tmp') && failures++ < 2) throw Object.assign(new Error('EBUSY: held'), { code: 'EBUSY' }); return fs.unlinkSync(file); } };
+      assert.equal(apply(project, { fsImpl: brief }).updated.length, 1);
+      assert.deepEqual(fs.readdirSync(project).filter((name) => name.startsWith(LOCK_NAME)), []);
     });
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });

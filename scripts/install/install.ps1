@@ -84,6 +84,10 @@ if ($NoSkills -and ($PSBoundParameters.ContainsKey('Skills') -or $PSBoundParamet
 if ($NoSkills) { $Skills = @() }
 $Skills = @($Skills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $OptionalSkills = @($OptionalSkills | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# Skill names become path segments: only plain names are accepted, never '..', separators, or absolute paths.
+foreach ($skill in @($Skills) + @($OptionalSkills)) {
+  if ($skill -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { throw "Invalid skill name: $skill" }
+}
 $allowedTools = @('codex','cline','kilo','copilot','claude')
 foreach ($tool in $Tools) { if ($tool -notin $allowedTools) { throw "Unknown tool: $tool" } }
 if ($CopilotAuditor -and 'copilot' -notin $Tools) { throw '-CopilotAuditor requires copilot in -Tools' }
