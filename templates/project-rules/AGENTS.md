@@ -26,6 +26,30 @@ Git commits created or prepared by an AI agent must preserve the human user's co
 - Do not rewrite already-published history merely to remove old AI attribution unless the user explicitly requests it.
 <!-- agent-kit:git-authorship:end -->
 
+<!-- agent-kit:destructive-operations:start -->
+## Destructive operations
+
+Judge risk by an operation's effect, not by the command, tool, MCP server, script, or programming language that performs it. A wrapper, alias, generated script, SDK, or API call with the same effect needs the same approval.
+
+Get explicit user approval before each operation that can:
+
+- irreversibly delete or overwrite data or files outside the approved edits;
+- discard uncommitted Git work, such as hard resets, restoring or checking out over changed paths, cleaning untracked files, or dropping stashes;
+- force-push, rewrite published history, or delete branches or tags;
+- bulk-modify, purge, or truncate database data, or reset, roll back, or repair migrations;
+- remove containers, volumes, or infrastructure resources;
+- write to production, deploy, or change secrets, credentials, or access settings;
+- run potentially expensive or sensitive production reads, such as log queries, large selections, bulk exports, or calls that consume paid quota or rate limits.
+
+When asking, name the target, scope, likely consequences, whether the operation is reversible, and how to recover; prefer a backup, snapshot, branch, or dry run first when one is available. Approval covers only that operation on that target within the current task. It does not extend to other targets, similar operations, or later tasks. Without approval, stop and report; do not look for an equivalent route.
+
+No extra approval is needed for ordinary work inside an approved task: reading local files; read-only Git commands such as `git status`, `git diff`, and `git log`; local tests and builds; editing files within the approved scope; creating new files; and removing clearly identified temporary artifacts, such as files the task created or build output the project treats as disposable.
+
+Treat production as read-only by default, which does not permit unbounded or sensitive reads. Where project rules name stricter limits, forbidden operations, or production targets, follow them.
+
+This policy is an instruction, not a technical control: it does not block commands and cannot guarantee that no damage occurs. Enforcement depends on each tool's own permissions and sandboxing, which Agent Kit does not configure automatically.
+<!-- agent-kit:destructive-operations:end -->
+
 Default to one primary skill for the requested outcome. Add a companion only for a distinct material risk, boundary, or required deliverable. One may be added with clear justification; each beyond that requires a distinct named reason. Security or irreversible data-integrity requirements may exceed this budget. Do not stack overlapping workflows for reassurance; load another skill later if investigation discovers a new boundary. Pure reading or explanation does not automatically require an implementation skill.
 
 Discover context nearest-first: this file, the primary skill, any mandatory justified companion, the nearest relevant project or module documentation, and only references required by the active task. Nearby documents cannot silently override higher-level project rules. Avoid preloading documentation trees and large static maps; add explicit pointers only for exceptional authoritative documents.
@@ -51,6 +75,7 @@ Choose Codex, Cline, Kilo, or Copilot based on scope, complexity, dependencies, 
 - Agent routing overrides or restrictions:
 - Verification commands:
 - Git, dependency, external-action, and destructive-action permissions:
+- Forbidden operations and targets beyond the destructive-operations policy:
 - Exceptional authoritative documentation pointers, if any:
 
 Previous projects are methodology references only, never visual or product templates.

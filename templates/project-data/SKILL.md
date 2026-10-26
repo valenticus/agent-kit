@@ -11,5 +11,6 @@ description: Project-owned source of truth for schema, migrations, persistence i
 - Transaction, atomicity, concurrency, retry, and idempotency rules:
 - Immutable/history, derived-value, currency/unit, and time semantics:
 - Backup, retention, privacy, and deletion behavior:
+- Backup and recovery steps required before destructive data or migration changes:
 - Data tests and local test environment:
 - Unknowns requiring explicit decisions:

@@ -21,6 +21,9 @@ const project = (agents) => {
 };
 const read = (dir) => fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8');
 const block = canonicalBlock();
+const destructive = canonicalBlock(undefined, 'destructive-operations');
+// Every shipped managed block, joined the way an update writes adjacent blocks.
+const managed = canonicalBlocks().map((entry) => entry.block).join('\n\n');
 const posix = process.platform !== 'win32';
 const refuses = (dir) => {
   const before = fs.readdirSync(dir).map((name) => [name, fs.readFileSync(path.join(dir, name), 'utf8')]);
@@ -49,21 +52,21 @@ try {
     assert.equal(update(dir), 'create');
     assert.equal(read(dir), fs.readFileSync(path.join(root, 'templates', 'project-rules', 'AGENTS.md'), 'utf8'));
   });
-  check('update: no block -> only the block is appended, project text preserved', () => {
+  check('update: no blocks -> only the managed blocks are appended, project text preserved', () => {
     for (const [original, eol] of [['# Mine\n\nRule A\n', '\n'], ['# Mine\r\n\r\nRule A\r\n', '\r\n'], ['# Mine\n\nno trailing newline', '\n'], ['', '\n']]) {
       const dir = project(original);
       assert.equal(update(dir), 'append');
       const result = read(dir);
       assert.ok(result.startsWith(original));
-      assert.equal(normalizeEol(result.slice(original.length)).trim(), block);
+      assert.equal(normalizeEol(result.slice(original.length)).trim(), managed);
       if (eol === '\r\n') assert.ok(!/(^|[^\r])\n/.test(result), 'CRLF file must stay CRLF');
       assert.equal(update(dir), 'noop', 'second run');
       assert.equal(read(dir), result);
     }
   });
-  check('update: current block -> no-op, bytes unchanged (including CRLF)', () => {
+  check('update: current blocks -> no-op, bytes unchanged (including CRLF)', () => {
     for (const eol of ['\n', '\r\n']) {
-      const dir = project(`# Mine${eol}${block.replace(/\n/g, eol)}${eol}tail${eol}`);
+      const dir = project(`# Mine${eol}${managed.replace(/\n/g, eol)}${eol}tail${eol}`);
       const before = read(dir);
       assert.equal(update(dir), 'noop');
       assert.equal(read(dir), before);
@@ -72,14 +75,14 @@ try {
   check('update: stale block -> only the block replaced; text before and after preserved; idempotent', () => {
     for (const eol of ['\n', '\r\n']) {
       const stale = [START_MARKER, '## Git authorship', 'old policy text', END_MARKER].join(eol);
-      const before = `# Mine${eol}project rule${eol}${eol}${stale}${eol}${eol}## After${eol}keep me${eol}`;
+      const before = `# Mine${eol}project rule${eol}${eol}${stale}${eol}${eol}${destructive.replace(/\n/g, eol)}${eol}${eol}## After${eol}keep me${eol}`;
       const dir = project(before);
       assert.equal(update(dir), 'replace');
       const result = read(dir);
       assert.ok(result.startsWith(`# Mine${eol}project rule${eol}${eol}`));
       assert.ok(result.endsWith(`${eol}${eol}## After${eol}keep me${eol}`));
       assert.ok(!result.includes('old policy text'));
-      assert.ok(normalizeEol(result).includes(block));
+      assert.ok(normalizeEol(result).includes(managed));
       if (eol === '\r\n') assert.ok(!/(^|[^\r])\n/.test(result));
       assert.equal(update(dir), 'noop');
       assert.equal(read(dir), result);
@@ -92,6 +95,8 @@ try {
       duplicate: `${block}\nmiddle\n${block}\n`,
       nested: `${START_MARKER}\n${START_MARKER}\ntext\n${END_MARKER}\n${END_MARKER}\n`,
       reversed: `${END_MARKER}\ntext\n${START_MARKER}\n`,
+      'valid Git authorship, destructive-operations start only': `${block}\n\n${startMarker('destructive-operations')}\ntext\n`,
+      'destructive-operations duplicated': `${block}\n\n${destructive}\n\n${destructive}\n`,
     };
     for (const [name, content] of Object.entries(cases)) {
       const dir = project(content);
@@ -282,8 +287,8 @@ try {
     assert.equal(read(dir), '# Mine\n');
   });
 
-  // Several named policies. The shipped template manages only Git authorship, so these checks use a disposable kit
-  // root whose template adds two example policies after it.
+  // Placement and refusal mechanics with several named policies, independent of the shipped policy set: a disposable
+  // kit root whose template holds Git authorship followed by two example policies.
   const templateText = fs.readFileSync(path.join(root, 'templates', 'project-rules', 'AGENTS.md'), 'utf8');
   const example = (policy, body) => `${startMarker(policy)}\n## ${policy}\n${body}\n${endMarker(policy)}`;
   const alpha = example('example-alpha', 'alpha rule');
@@ -294,7 +299,7 @@ try {
     fs.writeFileSync(path.join(dir, 'templates', 'project-rules', 'AGENTS.md'), template);
     return dir;
   };
-  const multiKit = kit(`${templateText}\n${alpha}\n\n${beta}\n`);
+  const multiKit = kit(`# Rules\n\n${block}\n\n${alpha}\n\n${beta}\n`);
   const crlf = (text) => normalizeEol(text).replace(/\n/g, '\r\n');
   const refusesWith = (dir, kitRoot, pattern) => {
     const before = fs.readFileSync(path.join(dir, 'AGENTS.md'));
@@ -303,8 +308,8 @@ try {
     assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(before), 'refusal must not mutate');
     assert.deepEqual(fs.readdirSync(dir), ['AGENTS.md'], 'refusal must not leave files');
   };
-  check('managed policies are discovered from the template in order; the shipped template manages only Git authorship', () => {
-    assert.deepEqual(canonicalBlocks().map((entry) => entry.policy), ['git-authorship']);
+  check('managed policies are discovered from the template in order', () => {
+    assert.deepEqual(canonicalBlocks().map((entry) => entry.policy), ['git-authorship', 'destructive-operations']);
     assert.deepEqual(canonicalBlocks(multiKit).map((entry) => entry.policy), ['git-authorship', 'example-alpha', 'example-beta']);
     assert.equal(canonicalBlock(multiKit), block, 'Git-authorship block is unchanged by other policies');
     assert.equal(canonicalBlock(multiKit, 'example-beta'), beta);
@@ -407,15 +412,21 @@ try {
       try { refusesWith(dir, badKit, pattern); } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
     }
   });
-  check('v1.8.0 compatibility: projects created or upgraded by v1.8.0 are byte-identical no-ops', () => {
+  check('v1.8.0 projects gain only the destructive-operations block, right after Git authorship; project text, EOL, and BOM kept; idempotent', () => {
     const bom = Buffer.from([0xef, 0xbb, 0xbf]);
-    for (const text of [templateText, `# Project rules\n\n${block}\n`, `# Project rules\n${block}\n\n## Mine\nkeep\n`]) {
-      for (const bytes of [Buffer.from(text), Buffer.from(crlf(text)), Buffer.concat([bom, Buffer.from(crlf(text))])]) {
+    // v1.8.0 shipped the same Git-authorship block and no other managed block.
+    const v180Template = normalizeEol(templateText).replace(`\n\n${destructive}`, '');
+    assert.ok(!v180Template.includes(startMarker('destructive-operations')) && v180Template.includes(block));
+    for (const text of [v180Template, `# Project rules\n\n${block}\n`, `# Project rules\n${block}\n\n## Mine\nkeep\n`]) {
+      const expected = text.replace(block, `${block}\n\n${destructive}`);
+      for (const [encode, prefix] of [[(value) => value, Buffer.alloc(0)], [crlf, Buffer.alloc(0)], [crlf, bom]]) {
         const dir = project();
-        fs.writeFileSync(path.join(dir, 'AGENTS.md'), bytes);
-        assert.equal(planUpdate(decodeStrict(bytes).text).action, 'noop');
+        fs.writeFileSync(path.join(dir, 'AGENTS.md'), Buffer.concat([prefix, Buffer.from(encode(text))]));
+        assert.equal(update(dir), 'append');
+        const after = fs.readFileSync(path.join(dir, 'AGENTS.md'));
+        assert.ok(after.equals(Buffer.concat([prefix, Buffer.from(encode(expected))])), 'only the new block is inserted');
         assert.equal(update(dir), 'noop');
-        assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(bytes));
+        assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(after), 'second run is byte-identical');
       }
     }
   });

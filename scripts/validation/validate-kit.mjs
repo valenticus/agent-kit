@@ -95,6 +95,41 @@ for (const { policy, block } of managedPolicies.filter((entry) => entry.policy !
     else if (normalizedRoot.slice(found.begin, found.end) !== block) errors.push(`managed ${policyLabel(policy)} blocks differ between root AGENTS.md and the project rules template`);
   } catch (error) { errors.push(`root AGENTS.md: ${error.message}`); }
 }
+// Destructive-operations policy: effect-based scope, the approval contract, the safe-work exemption, and honest limits.
+const destructiveBlock = managedPolicies.find((entry) => entry.policy === 'destructive-operations')?.block;
+if (!destructiveBlock) errors.push('project rules template lacks the managed destructive-operations block');
+else {
+  for (const pattern of [
+    /by an operation's effect, not by the command, tool, MCP server, script, or programming language/,
+    /explicit user approval before each operation/,
+    /irreversibly delete or overwrite data/,
+    /discard uncommitted Git work/,
+    /force-push, rewrite published history, or delete branches or tags/,
+    /bulk-modify, purge, or truncate database data, or reset, roll back, or repair migrations/,
+    /remove containers, volumes, or infrastructure resources/,
+    /write to production, deploy, or change secrets/,
+    /expensive or sensitive production reads, such as log queries, large selections, bulk exports/,
+    /name the target, scope, likely consequences, whether the operation is reversible, and how to recover/,
+    /Approval covers only that operation on that target within the current task/,
+    /No extra approval is needed for ordinary work inside an approved task/,
+    /production as read-only by default, which does not permit unbounded or sensitive reads/,
+    /not a technical control/,
+    /Agent Kit does not configure automatically/,
+  ]) {
+    if (!pattern.test(destructiveBlock)) errors.push(`destructive-operations block is missing required rule ${pattern}`);
+  }
+  for (const forbidden of [/\b(?:always|fully|completely|guaranteed) safe\b/i, /\b(?:blocks|prevents) (?:all|every)\b/i]) {
+    if (forbidden.test(destructiveBlock)) errors.push(`destructive-operations block must not promise absolute safety (${forbidden})`);
+  }
+}
+for (const [rel, patterns] of [
+  ['templates/project-rules/AGENTS.md', [/Forbidden operations and targets/]],
+  ['templates/project-architecture/SKILL.md', [/Production projects and environments/, /quotas, rate limits, and paid APIs/]],
+  ['templates/project-data/SKILL.md', [/Backup and recovery steps/]],
+]) {
+  const text = await readFile(path.join(root, rel), 'utf8');
+  for (const pattern of patterns) if (!pattern.test(text)) errors.push(`${rel} lacks the project field ${pattern}`);
+}
 if (!hasUkrainianCommunicationPolicy(projectRules)) errors.push('project rules lack the canonical consumer-project communication-language policy');
 // Adapters, agents, skills, and non-rule templates must inherit authorship policy from AGENTS.md, never carry a copy.
 async function* walk(directory) {
