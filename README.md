@@ -21,7 +21,7 @@ A new project also receives a root `AGENTS.md` from `templates/project-rules/AGE
 
 Installation is an explicit, one-shot operation. It does not start agents, loops, commits, dependency installation, or synchronization.
 
-The default `-Skills` selection stays compact. Install `data-visualization` explicitly with `-Skills data-visualization` or include it in a comma-separated core skill selection when visualization decisions are material.
+The default `-Skills` selection stays compact. Install `data-visualization` explicitly with `-Skills data-visualization` or include it in a comma-separated core skill selection when visualization decisions are material. The opt-in `handoff` skill (`-Skills handoff`) prepares or resumes a compact, verifiable handoff of unfinished work between sessions and agents; it returns the handoff in chat by default and never clears context, commits, or changes the working tree.
 
 `security-audit` is an adapted optional Cloudflare module, selected only with `-OptionalSkills security-audit`. Installation does not run an audit. On an existing project, use `-Skills @()` from a PowerShell session when adding only this optional module; `-NoSkills` cannot be combined with `-OptionalSkills`. The installer refuses existing destinations, so select tools whose adapter destinations are free rather than reinstalling existing adapters.
 

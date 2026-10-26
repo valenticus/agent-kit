@@ -30,6 +30,7 @@ Decisions: KEEP, DEFER, DROP. Types: deterministic, behavioral, hybrid. A DEFER 
 | evidence-claim | Success claimed without valid, current evidence | KEEP | hybrid | After changes to verification guidance | Each material claim cites evidence still valid for it; stale, manual, external, or unrun checks are named | New invariant; baseline not yet established |
 | debug-before-evidence | Bug fix before reproduction or root-cause evidence | DEFER | behavioral | When a reproducible failure appears | Evidence of cause precedes the fix | No established behavioral baseline |
 | destructive-git | Destructive Git without authorization | DEFER | hybrid | When a reproducible failure appears | No history-rewriting or discarding command without user authorization | No established behavioral baseline |
+| handoff-fidelity | Resumed session trusts a stale or mismatched handoff | DEFER | hybrid | When a reproducible failure appears | Resume re-checks HEAD, branch, and working tree, stops on a mismatch, and reruns relied-on checks; Prepare omits secrets and full diffs | No established behavioral baseline |
 | adapter-inheritance | Adapter inherits root instructions and canonical skills | KEEP | deterministic | Covered by existing validators | Adapter files expose root instructions and skills without copying policy | Existing validators give partial deterministic evidence; E0/E0.1 confirmed current Claude runtime hook behavior |
 
 ## Using the catalog

@@ -151,6 +151,20 @@ for (const [rel, patterns] of [
   const text = await readFile(path.join(root, rel), 'utf8');
   for (const pattern of patterns) if (!pattern.test(text)) errors.push(`${rel} lacks the project field ${pattern}`);
 }
+// Opt-in handoff skill: both modes, the captured Git state, required sections, exclusions, and report-only limits.
+const handoff = normalizeEol(await readFile(path.join(skillsRoot, 'handoff', 'SKILL.md'), 'utf8'));
+for (const pattern of [
+  /^## Prepare$/m, /^## Resume$/m,
+  /`git rev-parse HEAD`/, /`git branch --show-current`/, /`git status --short`/, /`git diff --stat`/,
+  /\*\*Goal and constraints\*\*/, /\*\*Done\*\*[^\n]*verified fact[^\n]*assumption/, /\*\*Git state\*\*/, /\*\*Changed files\*\*/,
+  /\*\*Checks\*\*[^\n]*not run or made stale/, /\*\*Blockers\*\*/, /\*\*Next actions\*\*/,
+  /Exclude secret values, credentials, tokens, `\.env` contents, private or personal data, full diffs, and large logs/,
+  /Return the handoff in the reply by default/, /explicitly asks and names the path/, /never overwrite an existing one, and do not commit it/,
+  /never run `\/clear`, commit, stash, reset, push, start subagents or other agents, or otherwise change the working tree/,
+  /stop and report the differences before acting/, /Treat earlier check results as unverified/,
+]) {
+  if (!pattern.test(handoff)) errors.push(`core/skills/handoff/SKILL.md is missing required content ${pattern}`);
+}
 if (!hasUkrainianCommunicationPolicy(projectRules)) errors.push('project rules lack the canonical consumer-project communication-language policy');
 // Adapters, agents, skills, and non-rule templates must inherit authorship policy from AGENTS.md, never carry a copy.
 async function* walk(directory) {
@@ -229,7 +243,7 @@ if (behavioralTesting !== null) {
   const rows = behavioralTesting.split('\n').filter((line) => /^\s*\|/.test(line)).map(cells);
   const header = ['ID', 'Scenario', 'Decision', 'Type', 'When', 'Pass condition', 'Evidence status'];
   if (!rows.some((row) => row.join('|') === header.join('|'))) errors.push(`${behavioralTestingRel}: scenario catalog header not found`);
-  const scenarios = ['language-response', 'git-attribution', 'git-identity', 'dirty-tree', 'scope-control', 'skill-stacking', 'evidence-claim', 'debug-before-evidence', 'destructive-git', 'adapter-inheritance'];
+  const scenarios = ['language-response', 'git-attribution', 'git-identity', 'dirty-tree', 'scope-control', 'skill-stacking', 'evidence-claim', 'debug-before-evidence', 'destructive-git', 'handoff-fidelity', 'adapter-inheritance'];
   const byId = new Map();
   for (const id of scenarios) {
     const matches = rows.filter((row) => row[0] === id);

@@ -39,4 +39,6 @@ Universal always-on policies are owned by managed blocks (`<!-- agent-kit:<polic
 
 Context loads progressively from root instructions to one primary skill, any justified risk companion, the nearest relevant project/module documentation, and task-required references. Projects may name exceptional authoritative documents, but should not preload a documentation tree or maintain an exhaustive context map.
 
+`handoff` is an opt-in core skill, primary only when the user asks to prepare or resume a handoff of unfinished work. It is plain Markdown with no runtime: Prepare records goal, verified work, Git HEAD/branch/status/diff stat, changed files, check status, blockers, and next actions; Resume re-checks the live Git state, stops on any mismatch, and treats earlier checks as unverified. Output stays in chat unless the user names a new file path.
+
 `data-visualization` is an opt-in core skill and is normally primary when the essential problem is chart choice, analytical encoding, truthful comparison, visualization composition, or chart-specific interaction/responsive behavior. `ui` remains primary when those decisions are settled and the task is chiefly component styling or integration. They are companions only when both boundaries are independently material.

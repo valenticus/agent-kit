@@ -150,6 +150,18 @@ try {
     if (!canonical.equals(shared) || !shared.equals(clineMirror)) throw new Error(`data-visualization/${relative}: installed copies differ from canonical source`);
   }
 
+  // Opt-in handoff skill: explicit -Skills handoff for all five tools; byte-identical shared copy, Cline mirror, and Claude
+  // link exposure. The default selection check below keeps it out of default installs.
+  const handoffProject = path.join(workspace, 'handoff');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(handoffProject));
+  await runInstall(handoffProject, ['codex', 'cline', 'kilo', 'copilot', 'claude'], [], 'handoff');
+  await execFileAsync(process.execPath, [installValidator, handoffProject]);
+  const canonicalHandoff = await readFile(path.join(root, 'core', 'skills', 'handoff', 'SKILL.md'));
+  for (const relative of ['.agents/skills/handoff/SKILL.md', '.cline/skills/handoff/SKILL.md', '.claude/skills/handoff/SKILL.md']) {
+    if (!canonicalHandoff.equals(await readFile(path.join(handoffProject, relative)))) throw new Error(`handoff: ${relative} differs from the canonical skill`);
+  }
+  if ((await readdir(path.join(handoffProject, '.agents', 'skills'))).join() !== 'handoff') throw new Error('handoff: explicit selection installed other skills');
+
   // Claude adapter: opt-in, reuses the single .agents/skills materialization, never overwrites, and is idempotent when re-applied.
   const claudeOnly = path.join(workspace, 'claude-only');
   await import('node:fs/promises').then(({ mkdir }) => mkdir(claudeOnly));
@@ -392,7 +404,7 @@ try {
   await runInstall(validAncestors, ['codex', 'cline', 'copilot']);
   if (!await exists(path.join(validAncestors, '.cline', 'skills', 'safe-change', 'SKILL.md'))) throw new Error('valid existing ancestor directories were rejected');
 
-  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, security-audit opt-in distribution for all five tools and unchanged defaults, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight including non-directory ancestors.`);
+  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization and handoff distribution, security-audit opt-in distribution for all five tools and unchanged defaults, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight including non-directory ancestors.`);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
