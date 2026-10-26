@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $kitRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $project = Resolve-Path $ProjectRoot
 if ($UpdatePolicies) {
-  # Standalone, explicit upgrade of the managed Git-authorship block in an existing project's AGENTS.md.
+  # Standalone, explicit upgrade of the managed policy blocks in an existing project's AGENTS.md.
   foreach ($name in @('Tools','Skills','OptionalSkills','CopilotAuditor','NoSkills')) {
     if ($PSBoundParameters.ContainsKey($name)) { throw "-UpdatePolicies is a standalone operation and cannot be combined with -$name" }
   }
@@ -58,7 +58,7 @@ if ('copilot' -in $Tools) {
     $fileCopies += ,@((Join-Path $kitRoot 'adapters\copilot\project-auditor.agent.md'), (Join-Path $project '.github\agents\project-auditor.agent.md'))
   }
 }
-# A new project gets the canonical root instructions (with the managed Git-authorship block). An existing AGENTS.md is never touched here.
+# A new project gets the canonical root instructions (with the managed policy blocks). An existing AGENTS.md is never touched here.
 $agentsDestination = Join-Path $project 'AGENTS.md'
 if (Test-Path -LiteralPath $agentsDestination -PathType Container) { throw "$agentsDestination is a directory, not a file" }
 if (-not (Test-Path -LiteralPath $agentsDestination)) {

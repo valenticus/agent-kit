@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { isAgentKitHook } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'claude-adapter.mjs')).href);
-const { canonicalBlock, locateBlock, normalizeEol } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'policy-block.mjs')).href);
+const { normalizeEol, policyLabel, policyStatus } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'policy-block.mjs')).href);
 const project = path.resolve(process.argv[2] ?? '.');
 const agents = path.join(project, '.agents', 'skills');
 const cline = path.join(project, '.cline', 'skills');
@@ -70,12 +70,13 @@ try {
     if (!gitignore.split(/\r?\n/).some((line) => ['/.claude/skills', '.claude/skills'].includes(line.trim()))) throw new Error('generated .claude/skills is not git-ignored');
   } else if (claudeLinkStat) throw new Error('.claude/skills exists without the Agent Kit Claude adapter bootstrap');
   const agentsMdPath = path.join(project, 'AGENTS.md');
-  if (!await exists(agentsMdPath)) console.warn('warning: no root AGENTS.md; run install.ps1 -UpdatePolicies to add the canonical Git-authorship policy');
+  if (!await exists(agentsMdPath)) console.warn('warning: no root AGENTS.md; run install.ps1 -UpdatePolicies to add the canonical managed policies');
   else {
     const agentsMd = normalizeEol(await readFile(agentsMdPath, 'utf8'));
-    const located = locateBlock(agentsMd); // throws on malformed markers
-    if (!located) console.warn('warning: AGENTS.md lacks the managed Git-authorship block; run install.ps1 -UpdatePolicies');
-    else if (agentsMd.slice(located.begin, located.end) !== canonicalBlock(kitRoot)) console.warn('warning: AGENTS.md Git-authorship block is stale; run install.ps1 -UpdatePolicies');
+    for (const { policy, state } of policyStatus(agentsMd, kitRoot)) { // throws on malformed or overlapping markers
+      if (state === 'missing') console.warn(`warning: AGENTS.md lacks the managed ${policyLabel(policy)} block; run install.ps1 -UpdatePolicies`);
+      else if (state === 'stale') console.warn(`warning: AGENTS.md ${policyLabel(policy)} block is stale; run install.ps1 -UpdatePolicies`);
+    }
   }
   const copilotInstructionsPath = path.join(project, '.github', 'copilot-instructions.md');
   if (await exists(copilotInstructionsPath)) {

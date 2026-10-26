@@ -356,6 +356,21 @@ try {
   await failsWith(runUpdate(malformedAgents), /Policy update refused/, 'malformed markers');
   if (await snapshot(malformedAgents) !== malformedBefore) throw new Error('-UpdatePolicies mutated a project with malformed markers');
 
+  // A v1.8.0-era AGENTS.md with project sections, CRLF, and a BOM: a current block is a byte-identical no-op, and a
+  // stale block is the only text replaced.
+  const block = canonicalTemplate.toString('utf8').replace(/\r\n/g, '\n').match(/<!-- agent-kit:git-authorship:start -->[\s\S]*?<!-- agent-kit:git-authorship:end -->/)[0];
+  const legacyText = (policy) => `# Project rules\r\n\r\n## Mine\r\nkeep\r\n\r\n${policy.replace(/\n/g, '\r\n')}\r\n\r\n## After\r\nkeep too\r\n`;
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const legacy = path.join(workspace, 'policy-legacy');
+  await mkdir(legacy);
+  const legacyBytes = Buffer.concat([bom, Buffer.from(legacyText(block))]);
+  await writeFile(path.join(legacy, 'AGENTS.md'), legacyBytes);
+  await runUpdate(legacy);
+  if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(legacyBytes)) throw new Error('-UpdatePolicies changed a current v1.8.0-era AGENTS.md');
+  await writeFile(path.join(legacy, 'AGENTS.md'), Buffer.concat([bom, Buffer.from(legacyText('<!-- agent-kit:git-authorship:start -->\nold\n<!-- agent-kit:git-authorship:end -->'))]));
+  await runUpdate(legacy);
+  if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(legacyBytes)) throw new Error('-UpdatePolicies did not replace only the stale block');
+
   // Valid pre-existing directory ancestors must keep working.
   const validAncestors = path.join(workspace, 'valid-ancestors');
   await mkdir(path.join(validAncestors, '.cline', 'skills'), { recursive: true });

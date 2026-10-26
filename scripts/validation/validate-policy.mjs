@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { END_MARKER, START_MARKER, canonicalBlock, decodeStrict, locateBlock, normalizeEol, planUpdate, preflightUpdate, update } from '../install/policy-block.mjs';
+import { END_MARKER, START_MARKER, canonicalBlock, canonicalBlocks, decodeStrict, endMarker, locateBlock, normalizeEol, planUpdate, policyStatus, preflightUpdate, startMarker, update } from '../install/policy-block.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workspace = fs.mkdtempSync(path.join(tmpdir(), 'agent-kit-policy-'));
@@ -282,7 +282,145 @@ try {
     assert.equal(read(dir), '# Mine\n');
   });
 
-  console.log(`Validated ${checks} Git-authorship policy block checks (canonical parity, marker strictness, encoding/BOM, links, mode, temp cleanup, entrypoint, create/append/replace/no-op, malformed refusal, EOL, idempotency).${skipped.length ? ` Not exercised on this host: ${skipped.join('; ')}.` : ''}`);
+  // Several named policies. The shipped template manages only Git authorship, so these checks use a disposable kit
+  // root whose template adds two example policies after it.
+  const templateText = fs.readFileSync(path.join(root, 'templates', 'project-rules', 'AGENTS.md'), 'utf8');
+  const example = (policy, body) => `${startMarker(policy)}\n## ${policy}\n${body}\n${endMarker(policy)}`;
+  const alpha = example('example-alpha', 'alpha rule');
+  const beta = example('example-beta', 'beta rule');
+  const kit = (template) => {
+    const dir = path.join(workspace, `kit${counter++}`);
+    fs.mkdirSync(path.join(dir, 'templates', 'project-rules'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'templates', 'project-rules', 'AGENTS.md'), template);
+    return dir;
+  };
+  const multiKit = kit(`${templateText}\n${alpha}\n\n${beta}\n`);
+  const crlf = (text) => normalizeEol(text).replace(/\n/g, '\r\n');
+  const refusesWith = (dir, kitRoot, pattern) => {
+    const before = fs.readFileSync(path.join(dir, 'AGENTS.md'));
+    assert.throws(() => preflightUpdate(dir, kitRoot), pattern);
+    assert.throws(() => update(dir, kitRoot), pattern);
+    assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(before), 'refusal must not mutate');
+    assert.deepEqual(fs.readdirSync(dir), ['AGENTS.md'], 'refusal must not leave files');
+  };
+  check('managed policies are discovered from the template in order; the shipped template manages only Git authorship', () => {
+    assert.deepEqual(canonicalBlocks().map((entry) => entry.policy), ['git-authorship']);
+    assert.deepEqual(canonicalBlocks(multiKit).map((entry) => entry.policy), ['git-authorship', 'example-alpha', 'example-beta']);
+    assert.equal(canonicalBlock(multiKit), block, 'Git-authorship block is unchanged by other policies');
+    assert.equal(canonicalBlock(multiKit, 'example-beta'), beta);
+  });
+  check('multiple: v1.8.0-shaped projects gain missing blocks after Git authorship; project text, EOL, and BOM kept; idempotent', () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    for (const [eol, prefix] of [['\n', Buffer.alloc(0)], ['\r\n', Buffer.alloc(0)], ['\n', bom], ['\r\n', bom]]) {
+      const original = `# Mine${eol}rule${eol}${eol}${block.replace(/\n/g, eol)}${eol}${eol}## After${eol}keep me${eol}`;
+      const dir = project();
+      fs.writeFileSync(path.join(dir, 'AGENTS.md'), Buffer.concat([prefix, Buffer.from(original)]));
+      assert.equal(update(dir, multiKit), 'append');
+      const bytes = fs.readFileSync(path.join(dir, 'AGENTS.md'));
+      assert.equal(bytes.subarray(0, 3).equals(bom), prefix.length > 0, 'BOM kept as it was');
+      const result = bytes.subarray(prefix.length).toString('utf8');
+      assert.equal(result, `# Mine${eol}rule${eol}${eol}${[block, alpha, beta].join('\n\n').replace(/\n/g, eol)}${eol}${eol}## After${eol}keep me${eol}`);
+      if (eol === '\r\n') assert.ok(!/(^|[^\r])\n/.test(result), 'CRLF file must stay CRLF');
+      assert.equal(update(dir, multiKit), 'noop');
+      assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(bytes), 'second run is byte-identical');
+    }
+    const fromTemplate = project(templateText);
+    assert.equal(update(fromTemplate, multiKit), 'append');
+    // The checkout may store the template with CRLF; the update keeps whichever EOL the file uses.
+    const expected = normalizeEol(templateText).replace(block, `${block}\n\n${alpha}\n\n${beta}`);
+    assert.equal(read(fromTemplate), templateText.includes('\r\n') ? crlf(expected) : expected, 'template-created project: only the new blocks are inserted');
+  });
+  check('multiple: no managed blocks -> all appended at the end in template order', () => {
+    for (const original of ['# Mine\n', '# Mine', '']) {
+      const dir = project(original);
+      assert.equal(update(dir, multiKit), 'append');
+      const separator = original === '' ? '' : original.endsWith('\n') ? '\n' : '\n\n';
+      assert.equal(read(dir), `${original}${separator}${block}\n\n${alpha}\n\n${beta}\n`);
+      assert.equal(update(dir, multiKit), 'noop');
+    }
+  });
+  check('multiple: blocks update independently; current blocks stay byte-identical', () => {
+    const staleAlpha = example('example-alpha', 'old alpha');
+    const dir = project(`# Mine\n\n${block}\n\nbetween\n\n${staleAlpha}\n\n${beta}\n\ntail\n`);
+    const plan = planUpdate(read(dir), multiKit);
+    assert.equal(plan.action, 'replace');
+    assert.deepEqual(plan.changes, [{ policy: 'example-alpha', action: 'replace' }]);
+    assert.equal(update(dir, multiKit), 'replace');
+    assert.equal(read(dir), `# Mine\n\n${block}\n\nbetween\n\n${alpha}\n\n${beta}\n\ntail\n`);
+    assert.equal(update(dir, multiKit), 'noop');
+  });
+  check('multiple: stale and missing blocks in one update; missing earlier blocks go before the next present block', () => {
+    const staleGit = `${START_MARKER}\nold policy text\n${END_MARKER}`;
+    const mixed = project(crlf(`# Mine\n\n${staleGit}\n\n${beta}\n\ntail\n`));
+    const plan = planUpdate(read(mixed), multiKit);
+    assert.equal(plan.action, 'update');
+    assert.deepEqual(plan.changes, [{ policy: 'git-authorship', action: 'replace' }, { policy: 'example-alpha', action: 'append' }]);
+    assert.equal(update(mixed, multiKit), 'update');
+    assert.equal(read(mixed), crlf(`# Mine\n\n${block}\n\n${alpha}\n\n${beta}\n\ntail\n`));
+    assert.equal(update(mixed, multiKit), 'noop');
+    const onlyLast = project(`# Mine\n\n${beta}\n\ntail\n`);
+    assert.equal(update(onlyLast, multiKit), 'append');
+    assert.equal(read(onlyLast), `# Mine\n\n${block}\n\n${alpha}\n\n${beta}\n\ntail\n`);
+    const staleLast = project(`# Mine\n\n${example('example-beta', 'old beta')}\n`);
+    assert.equal(update(staleLast, multiKit), 'update');
+    assert.equal(read(staleLast), `# Mine\n\n${block}\n\n${alpha}\n\n${beta}\n`);
+  });
+  check('multiple: one malformed, duplicate, reversed, or overlapping block refuses the whole update with zero mutation', () => {
+    const staleGit = `${START_MARKER}\nold policy text\n${END_MARKER}`;
+    const cases = {
+      'start only': [`${staleGit}\n\n${startMarker('example-alpha')}\nalpha\n`, /1 start and 0 end example-alpha markers/],
+      duplicate: [`${staleGit}\n\n${beta}\n\n${beta}\n`, /example-beta markers/],
+      reversed: [`${staleGit}\n\n${endMarker('example-alpha')}\n${startMarker('example-alpha')}\n`, /example-alpha end marker appears before/],
+      'nested in Git authorship': [`${START_MARKER}\nold\n${alpha}\n${END_MARKER}\n`, /overlap or are nested/],
+      'Git authorship nested': [`${startMarker('example-beta')}\n${block}\n${endMarker('example-beta')}\n`, /overlap or are nested/],
+      interleaved: [`${START_MARKER}\n${startMarker('example-alpha')}\n${END_MARKER}\n${endMarker('example-alpha')}\n`, /overlap or are nested/],
+    };
+    for (const [name, [content, pattern]] of Object.entries(cases)) {
+      for (const text of [content, crlf(content)]) {
+        const dir = project(text);
+        try { refusesWith(dir, multiKit, pattern); } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+      }
+    }
+  });
+  check('multiple: markers of policies absent from the template are ordinary project text', () => {
+    const foreign = `${startMarker('future-policy')}\nkeep\n`;
+    const dir = project(`# Mine\n${foreign}`);
+    assert.equal(update(dir, multiKit), 'append');
+    assert.ok(read(dir).startsWith(`# Mine\n${foreign}`));
+    assert.equal(update(dir, multiKit), 'noop');
+  });
+  check('policyStatus reports missing, stale, and current per policy', () => {
+    const text = `${block}\n\n${example('example-alpha', 'old')}\n`;
+    assert.deepEqual(policyStatus(text, multiKit).map(({ policy, state }) => [policy, state]), [['git-authorship', 'current'], ['example-alpha', 'stale'], ['example-beta', 'missing']]);
+    assert.deepEqual(policyStatus(crlf(text), multiKit).map(({ state }) => state), ['current', 'stale', 'missing']);
+    assert.throws(() => policyStatus(`${beta}\n${beta}\n`, multiKit), /example-beta markers/);
+  });
+  check('an invalid canonical template refuses every update with zero mutation', () => {
+    const invalid = {
+      'duplicate policy': [kit(`${templateText}\n${alpha}\n\n${alpha}\n`), /Canonical template is invalid/],
+      'overlapping policies': [kit(`${templateText}\n${startMarker('example-alpha')}\n${beta}\n${endMarker('example-alpha')}\n`), /Canonical template is invalid/],
+      'no Git authorship': [kit(`# Rules\n\n${alpha}\n`), /lacks the managed Git-authorship block/],
+      'invalid policy name': [kit(`${templateText}\n<!-- agent-kit:Bad_Name:start -->\n<!-- agent-kit:Bad_Name:end -->\n`), /invalid managed policy name/],
+    };
+    for (const [name, [badKit, pattern]] of Object.entries(invalid)) {
+      const dir = project(`# Mine\n\n${block}\n`);
+      try { refusesWith(dir, badKit, pattern); } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+    }
+  });
+  check('v1.8.0 compatibility: projects created or upgraded by v1.8.0 are byte-identical no-ops', () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    for (const text of [templateText, `# Project rules\n\n${block}\n`, `# Project rules\n${block}\n\n## Mine\nkeep\n`]) {
+      for (const bytes of [Buffer.from(text), Buffer.from(crlf(text)), Buffer.concat([bom, Buffer.from(crlf(text))])]) {
+        const dir = project();
+        fs.writeFileSync(path.join(dir, 'AGENTS.md'), bytes);
+        assert.equal(planUpdate(decodeStrict(bytes).text).action, 'noop');
+        assert.equal(update(dir), 'noop');
+        assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(bytes));
+      }
+    }
+  });
+
+  console.log(`Validated ${checks} managed policy block checks (canonical parity, marker strictness, encoding/BOM, links, mode, temp cleanup, entrypoint, create/append/replace/no-op, malformed refusal, EOL, idempotency, multiple named policies with independent updates, placement, all-or-nothing refusal, and v1.8.0 compatibility).${skipped.length ? ` Not exercised on this host: ${skipped.join('; ')}.` : ''}`);
 } finally {
   fs.rmSync(workspace, { recursive: true, force: true });
 }

@@ -10,7 +10,7 @@ Never copy project identity, domain answers, vendor modifications, or one-off fe
 
 New kit version -> review release/diff against the project's current stack and hooks -> select only compatible relevant universal changes -> regenerate or merge selected adapters -> keep project hooks and rules untouched -> validate project behavior.
 
-A fresh install creates `AGENTS.md` from the project-rules template when absent, and a normal install never overwrites an existing one. A newly introduced universal always-on policy reaches an existing project only through the explicit, standalone `install.ps1 -UpdatePolicies` step, which touches only the managed block in `AGENTS.md`, preserves everything else (including link targets, encoding, and file mode), and refuses on ambiguous markers or non-UTF-8 content.
+A fresh install creates `AGENTS.md` from the project-rules template when absent, and a normal install never overwrites an existing one. A newly introduced universal always-on policy reaches an existing project only through the explicit, standalone `install.ps1 -UpdatePolicies` step, which touches only the managed blocks in `AGENTS.md`, preserves everything else (including link targets, encoding, and file mode), and refuses on ambiguous markers in any block or non-UTF-8 content.
 
 There is no blind bidirectional sync. Existing project mirrors may be compared with their recorded canonical version, but changes require human-reviewed import. A newer kit version must never overwrite project-specific skills or hooks.
 

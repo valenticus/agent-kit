@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { locateBlock, normalizeEol } from '../install/policy-block.mjs';
+import { DEFAULT_POLICY, canonicalBlocks, locateBlock, normalizeEol, policyLabel } from '../install/policy-block.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const errors = [];
@@ -84,6 +84,17 @@ if (authorshipBlocks.every(Boolean)) {
     if (forbidden.test(block)) errors.push(`Git-authorship block must not prohibit agent-created commits (${forbidden})`);
   }
 }
+// Every other managed policy block in the template must also appear, identical, in the root AGENTS.md.
+let managedPolicies = [];
+try { managedPolicies = canonicalBlocks(root); } catch (error) { errors.push(`project rules template: ${error.message}`); }
+for (const { policy, block } of managedPolicies.filter((entry) => entry.policy !== DEFAULT_POLICY)) {
+  try {
+    const normalizedRoot = normalizeEol(rootRules);
+    const found = locateBlock(normalizedRoot, policy);
+    if (!found) errors.push(`root AGENTS.md lacks the managed ${policyLabel(policy)} block`);
+    else if (normalizedRoot.slice(found.begin, found.end) !== block) errors.push(`managed ${policyLabel(policy)} blocks differ between root AGENTS.md and the project rules template`);
+  } catch (error) { errors.push(`root AGENTS.md: ${error.message}`); }
+}
 if (!hasUkrainianCommunicationPolicy(projectRules)) errors.push('project rules lack the canonical consumer-project communication-language policy');
 // Adapters, agents, skills, and non-rule templates must inherit authorship policy from AGENTS.md, never carry a copy.
 async function* walk(directory) {
@@ -99,6 +110,7 @@ for (const directory of ['adapters', 'agents', 'core', 'templates']) {
     if (file === projectRulesFile) continue;
     const text = await readFile(file, 'utf8');
     if (/agent-kit:git-authorship|## Git authorship/i.test(text)) errors.push(`${path.relative(root, file)}: authorship policy must not be duplicated outside the canonical AGENTS.md block`);
+    else if (/agent-kit:[a-z0-9-]+:(?:start|end)/i.test(text)) errors.push(`${path.relative(root, file)}: managed policy markers must not be duplicated outside the canonical AGENTS.md blocks`);
   }
 }
 for (const file of [path.join(root, 'README.md'), ...(await readdir(path.join(root, 'docs'))).map((name) => path.join(root, 'docs', name))]) {
