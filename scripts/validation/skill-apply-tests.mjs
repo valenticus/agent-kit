@@ -70,7 +70,7 @@ export async function testSkillApply() {
     return { ...fs, renameSync: (...args) => { if (calls.includes(++count)) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${args[0]}'`), { code: 'EPERM' }); return fs.renameSync(...args); } };
   };
   // Runs an update in a child process that exits abruptly after the given fs call, like a crash or power loss.
-  const crash = (project, mode, after) => {
+  const crash = (project, mode, after, kitRoot = kit) => {
     const script = `
       import fs from 'node:fs';
       import { planSkillUpdate } from ${JSON.stringify(pathToFileURL(path.join(installDir, 'skill-update.mjs')).href)};
@@ -79,7 +79,7 @@ export async function testSkillApply() {
       const fsImpl = { ...fs,
         renameSync: (...args) => { fs.renameSync(...args); if (${JSON.stringify(mode)} === 'rename' && ++renames === ${after}) process.exit(9); },
         openSync: (...args) => { const fd = fs.openSync(...args); if (${JSON.stringify(mode)} === 'open' && String(args[0]).includes(${JSON.stringify(`${path.sep}new${path.sep}`)}) && ++opens === ${after}) process.exit(9); return fd; } };
-      const kitRoot = ${JSON.stringify(kit)};
+      const kitRoot = ${JSON.stringify(kitRoot)};
       applySkillUpdate(planSkillUpdate(${JSON.stringify(project)}, { kitRoot }), { kitRoot, fsImpl });`;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
     assert.equal(result.status, 9, `child did not crash as planned: ${result.stderr}`);
@@ -262,14 +262,61 @@ export async function testSkillApply() {
       refuses(() => recoverSkillUpdate(project), /Cannot recover alpha in \.agents\/skills unambiguously \(live, staged old, staged new: absent,other,to\)/);
       assert.deepEqual(contents(project), before);
     });
-    check('recover: a crash while staging changes nothing and asks for manual review', () => {
+    check('recover: a crash while staging is cleaned up, including a partly written file; skills are untouched', () => {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
-      crash(project, 'open', 1);
+      writeSkill(project, '.agents/skills', 'my-skill', { 'SKILL.md': 'mine\n' });
+      const skillsBefore = contents(path.join(project, '.agents/skills'));
+      crash(project, 'open', 2);
+      const { stage } = stagingOf(project);
+      const partial = fs.readdirSync(path.join(stage, 'new', 'alpha'), { recursive: true }).find((name) => name.endsWith('.md') && fs.statSync(path.join(stage, 'new', 'alpha', name)).size === 0);
+      assert.ok(partial, 'the crash leaves an empty staged file');
+      write(stage, `new/alpha/${partial.split(path.sep).join('/')}`, ALPHA_V2[partial.split(path.sep).join('/')].slice(0, 3));
+      const { results } = recoverSkillUpdate(project, { kitRoot: kit });
+      assert.deepEqual(results, [{ skill: `staging in .agents/${STAGING_NAME}`, result: 'removed; installed skills were not changed' }]);
+      assert.deepEqual(contents(path.join(project, '.agents/skills')), skillsBefore);
+      noLeftovers(project);
+    });
+    check('recover: staging leftovers that cannot be proven to belong to the operation are refused and kept', () => {
+      const scenarios = {
+        'foreign file': (stage) => write(stage, 'new/alpha/notes.md', 'mine\n'),
+        'non-prefix content': (stage) => write(stage, 'new/alpha/SKILL.md', 'not the kit source\n'),
+        'unexpected skill': (stage) => write(stage, 'new/beta/SKILL.md', BETA_V2['SKILL.md']),
+        'non-empty old': (stage) => write(stage, 'old/alpha/SKILL.md', ALPHA_V1['SKILL.md']),
+        'lock without intent': (stage, project) => { const lock = JSON.parse(fs.readFileSync(path.join(project, LOCK_NAME), 'utf8')); delete lock.entries; fs.writeFileSync(path.join(project, LOCK_NAME), JSON.stringify(lock)); },
+      };
+      for (const [name, tamper] of Object.entries(scenarios)) {
+        const project = fresh('p');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        crash(project, 'open', 1);
+        tamper(stagingOf(project).stage, project);
+        const before = contents(project);
+        try {
+          refuses(() => recoverSkillUpdate(project, { kitRoot: kit }), /Cannot clean up operation [0-9a-f-]+ in \.agents: .*Nothing was changed/);
+          assert.deepEqual(contents(project), before);
+        } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+      }
+      const ownKit = makeKit();
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(project, 'open', 1, ownKit);
+      write(ownKit, 'core/skills/alpha/SKILL.md', 'changed kit source\n');
       const before = contents(project);
-      refuses(() => recoverSkillUpdate(project), /stopped while staging in \.agents; installed skills were not changed/);
+      refuses(() => recoverSkillUpdate(project, { kitRoot: ownKit }), /kit source of alpha changed since the update started/);
       assert.deepEqual(contents(project), before);
+    });
+    check('recover: one location journaled and another interrupted while staging are both resolved', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      writeSkill(project, '.cline/skills', 'alpha', ALPHA_V1);
+      crash(project, 'open', 3);
+      assert.ok(fs.existsSync(path.join(stagingOf(project, '.agents').stage, 'journal.json')));
+      assert.ok(!fs.existsSync(path.join(stagingOf(project, '.cline').stage, 'journal.json')));
+      const { results } = recoverSkillUpdate(project, { kitRoot: kit });
+      assert.deepEqual(results.map((item) => item.result), ['previous version', 'removed; installed skills were not changed']);
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      assert.deepEqual(text(path.join(project, '.cline/skills/alpha')), ALPHA_V1);
+      noLeftovers(project);
     });
     check('recover: unknown staging entries, foreign locks, and a missing lock are refused untouched', () => {
       const unknown = fresh('p');

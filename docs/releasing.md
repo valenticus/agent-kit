@@ -9,6 +9,15 @@ The [Release Agent Kit workflow](../.github/workflows/release.yml) publishes sta
 3. Open GitHub Actions -> Release Agent Kit -> Run workflow. Select main and provide `tag` (for example `v1.8.0`) and `release_sha` (the full lowercase 40-character current main SHA). The dispatch SHA must equal this SHA; if main advances, prepare a new dispatch after validating its new HEAD.
 4. Inspect both preflight and release job results and the job summary. A successful publication reports the release URL, exact commit, and annotated tag object SHA. This workflow creates no commits and does not update VERSION.
 
+## Skill catalog requirements
+
+`-UpdateSkills` recognizes only skill content recorded in `scripts/install/skill-catalog.json`, so every release must add itself to the catalog:
+
+- Change a distributed skill (core or vendored) only together with a new VERSION. `generate` refuses when a skill differs from the existing release tag for the current VERSION, and `validate-kit.mjs` fails until the catalog matches the working tree.
+- Generate from a clone with full history and every release tag (`git fetch --tags`); `generate` refuses shallow clones and reports the tags it used. It cannot detect a deleted tag, so compare the reported list with the published releases.
+- Commit the regenerated catalog in the release-preparation commit and confirm `check` passes; ordinary CI reads only the committed file.
+- Never edit catalog entries by hand: an incorrect hash makes installed copies of that release unrecognized, so updates report them as conflicts.
+
 ## Gates and permissions
 
 Workflow-level permissions are empty. Preflight receives only contents/read and actions/read. The release job receives contents/write and actions/read only after successful preflight. Both use GitHub-hosted Ubuntu and Python's standard library; there are no external actions, checkout, dependencies, artifacts, PATs, repository secrets, production APIs, deploys, or agent sessions. The standard ephemeral GITHUB_TOKEN is passed only to the API client, not logs.

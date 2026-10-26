@@ -152,7 +152,7 @@ export function planSkillUpdate(projectRoot, { kitRoot: root = kitRoot, skills, 
   }
 
   if (lstatOrNull(fsImpl, path.join(project, LOCK_NAME))) {
-    plan.blockers.push(`${LOCK_NAME} exists: a skill update is running or was interrupted. If none is running, run: node scripts/install/skill-apply.mjs recover --project <project>`);
+    plan.blockers.push(`${LOCK_NAME} exists: a skill update is running or was interrupted. If none is running, run: install.ps1 -ProjectRoot <project> -RecoverSkillUpdate`);
   }
   for (const parent of ['.agents', '.cline']) {
     if (lstatOrNull(fsImpl, path.join(project, parent, STAGING_NAME))) plan.blockers.push(`${parent}/${STAGING_NAME} exists: leftovers of an earlier skill update; recover or review them first.`);

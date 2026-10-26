@@ -8,6 +8,7 @@ import process from 'node:process';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { testSkillApply } from './skill-apply-tests.mjs';
+import { testSkillUpdateCli } from './skill-update-cli-tests.mjs';
 import { testSkillCatalogAndPlanner } from './skill-update-tests.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -96,6 +97,7 @@ function resolveOnPath(name) {
 }
 shell = resolveOnPath(shell) ?? shell;
 console.log(`PowerShell path: ${shell}`);
+await testSkillUpdateCli({ shell, failsWith });
 const workspace = await mkdtemp(path.join(tmpdir(), 'agent-kit-copilot-'));
 
 // skills === null selects the explicit -NoSkills switch instead of -Skills.

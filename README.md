@@ -27,8 +27,32 @@ A new project also receives a root `AGENTS.md` from `templates/project-rules/AGE
 
 - **Policies:** run `install.ps1 -ProjectRoot <project> -UpdatePolicies` on its own (it needs Node.js and cannot be combined with other switches). Text inside a managed block is replaced by the kit version, so keep project rules outside the blocks. A marker counts only when it is the whole line; to show one in documentation, indent it or quote it inline (`` `<!-- agent-kit:git-authorship:start -->` ``). An exact unindented marker line, even inside a fenced code block, is treated as a real marker, and an unpaired one makes `-UpdatePolicies` refuse without changing the file.
 - **Add a skill:** run the installer with `-Skills <name>` (or `-OptionalSkills <name>`) and only the tools whose destinations are still free; it refuses any existing destination, including `.github/copilot-instructions.md`, `.kilo/agents/project-designer.md`, and installed skill directories. Use `-Tools codex` to add the shared `.agents/skills` copy, plus `cline` when the project has `.cline/skills`, for example `-Tools codex,cline -Skills handoff`. Claude Code, Kilo, and Copilot read the shared copy without extra destinations.
-- **Update or remove a skill:** the installer never updates or deletes installed skills, and there is no uninstall command. Review the kit diff, then edit or delete `.agents/skills/<name>` and its `.cline/skills/<name>` mirror together under version control. Adapter files (for example `CLAUDE.md`, the `.claude/settings.json` hook, `.claude/agent-kit/`, and the `.claude/skills` link) are likewise removed by hand.
+- **Update skills:** see [Update installed skills](#update-installed-skills).
+- **Remove a skill:** there is no uninstall command. Delete `.agents/skills/<name>` and its `.cline/skills/<name>` mirror together under version control. Adapter files (for example `CLAUDE.md`, the `.claude/settings.json` hook, `.claude/agent-kit/`, and the `.claude/skills` link) are likewise removed by hand.
 - Afterwards run `validate-install.mjs <project>`; it fails when the Cline mirror lacks a kit skill present in `.agents/skills`.
+
+## Update installed skills
+
+`install.ps1 -UpdateSkills` replaces installed Agent Kit skills in `.agents/skills` and `.cline/skills` with this kit's version (it needs Node.js). Claude Code, Kilo, and Copilot read `.agents/skills`, so they see the result without further steps. Preview first, then apply:
+
+```powershell
+# Plan only: lists current, update, conflict, skipped, and absent skills; writes nothing.
+powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/install.ps1 -ProjectRoot <project> -UpdateSkills -DryRun
+# Apply: every installed Agent Kit skill, or only the ones named with -Skills / -OptionalSkills.
+powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/install.ps1 -ProjectRoot <project> -UpdateSkills
+powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/install.ps1 -ProjectRoot <project> -UpdateSkills -Skills debugging,ui
+```
+
+- A skill is updated only when its files match a released Agent Kit version exactly (line endings aside). A skill with edited, added, or missing files is a conflict, and any conflict or blocker in the selection stops the whole update with nothing changed; narrow the selection with `-Skills` or resolve the conflict first. Third-party skills are skipped, and absent skills are reported but never installed.
+- `-UpdateSkills` is standalone: it cannot be combined with `-Tools`, `-NoSkills`, `-UpdatePolicies`, or `-CopilotAuditor`, and `-DryRun` requires it. It never commits, stashes, or runs other Git commands; review and commit the changed files yourself.
+- Close agent sessions that read these skills (Claude Code, Codex, Cline, Kilo, Copilot) before updating. Each skill is replaced with two renames and is briefly absent in between, and a session could read some skills before and some after the update.
+- Only one update runs per project; a second one is refused. If an update is interrupted (crash, power loss, a locked file on Windows), skills stay intact or are restorable, `.agent-kit-update.lock` remains, and further updates are refused until you run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/install.ps1 -ProjectRoot <project> -RecoverSkillUpdate
+```
+
+  Recovery completes a replacement that had already happened, otherwise restores the previous version, and removes the staged copies. It refuses, changing nothing, when it cannot prove that the leftovers belong to that update (for example edited staging files, unknown entries in `.agents/.agent-kit-update`, or a lock it did not write); review those manually.
 
 Installation is an explicit, one-shot operation. It does not start agents, loops, commits, dependency installation, or synchronization.
 

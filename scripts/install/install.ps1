@@ -5,11 +5,48 @@ param(
   [string[]]$OptionalSkills = @(),
   [switch]$CopilotAuditor,
   [switch]$NoSkills,
-  [switch]$UpdatePolicies
+  [switch]$UpdatePolicies,
+  [switch]$UpdateSkills,
+  [switch]$DryRun,
+  [switch]$RecoverSkillUpdate
 )
 $ErrorActionPreference = 'Stop'
 $kitRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $project = Resolve-Path $ProjectRoot
+if ($DryRun -and -not $UpdateSkills) { throw '-DryRun requires -UpdateSkills' }
+if ($UpdateSkills -or $RecoverSkillUpdate) {
+  # Standalone update of installed Agent Kit skills, or recovery of an interrupted one. The Node modules plan, verify,
+  # and apply every change; this script only validates arguments. Nothing is installed, removed, or committed.
+  $operation = if ($UpdateSkills) { '-UpdateSkills' } else { '-RecoverSkillUpdate' }
+  $incompatible = @('Tools','NoSkills','CopilotAuditor','UpdatePolicies')
+  if ($RecoverSkillUpdate) { $incompatible += @('UpdateSkills','Skills','OptionalSkills') }
+  foreach ($name in $incompatible) {
+    if ($PSBoundParameters.ContainsKey($name)) { throw "$operation is a standalone operation and cannot be combined with -$name" }
+  }
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "$operation requires Node.js on PATH" }
+  if ($RecoverSkillUpdate) {
+    & node (Join-Path $kitRoot 'scripts/install/skill-apply.mjs') recover --project $project.Path
+    if ($LASTEXITCODE -ne 0) { throw "-RecoverSkillUpdate stopped (exit $LASTEXITCODE); see the messages above." }
+    return
+  }
+  # -Skills has a default value, so only explicitly passed names narrow the selection.
+  $selected = @(foreach ($name in @('Skills','OptionalSkills')) {
+    if ($PSBoundParameters.ContainsKey($name)) { $PSBoundParameters[$name] | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } }
+  })
+  $arguments = @('--project', $project.Path)
+  if ($PSBoundParameters.ContainsKey('Skills') -or $PSBoundParameters.ContainsKey('OptionalSkills')) {
+    if ($selected.Count -eq 0) { throw '-Skills or -OptionalSkills was given without skill names' }
+    $arguments += @('--skills', ($selected -join ','))
+  }
+  if ($DryRun) {
+    & node (Join-Path $kitRoot 'scripts/install/skill-update.mjs') plan @arguments
+    if ($LASTEXITCODE -ne 0) { throw "-UpdateSkills -DryRun: the plan has conflicts or blockers (exit $LASTEXITCODE); nothing was changed." }
+    return
+  }
+  & node (Join-Path $kitRoot 'scripts/install/skill-apply.mjs') apply @arguments
+  if ($LASTEXITCODE -ne 0) { throw "-UpdateSkills stopped (exit $LASTEXITCODE); see the messages above for what, if anything, was changed." }
+  return
+}
 if ($UpdatePolicies) {
   # Standalone, explicit upgrade of the managed policy blocks in an existing project's AGENTS.md.
   foreach ($name in @('Tools','Skills','OptionalSkills','CopilotAuditor','NoSkills')) {
