@@ -21,6 +21,16 @@ Claude Code is an opt-in adapter that keeps `AGENTS.md` and `.agents/skills` can
 
 The kit has no model lock. Agent model choice belongs to environment/project configuration.
 
+## Optional source-only security audit
+
+`optional/vendored/security-audit` is a modified third-party package, pinned and documented in its `UPSTREAM.md`. It uses the existing vendored catalog/installer path and recursive distribution, including references, license, and explicit-only Codex invocation metadata in `agents/openai.yaml`. No installer runtime, adapter, permission, default selection, or new hook is required. Codex/Kilo/Copilot use shared `.agents/skills`; Cline uses the existing mirror; Claude uses its existing opt-in link. Actual discovery on a particular host/version is separate from file-distribution validation.
+
+Only an explicit user request naming `security-audit` activates it. Generic security questions, defects, implementation, and release reviews keep their existing primary workflow. Loading the package is not authorization. Codex hosts supporting `allow_implicit_invocation: false` enforce that invocation policy; other hosts use the textual gate and their own available controls. The package does not change root routing or automatically stack core workflows.
+
+The initial contract is one sequential source-only/offline/read-only pass with no execution, delegation, cloud/database MCP, production requests, or secret-value inspection. `confirmed` means statically proven, with explicit source-only/no-runtime markers; runtime-dependent leads require validation. Reports identify instructional limits separately from verified technical controls. Source inspection cannot guarantee that permitted source contains no embedded secret; incidental values must not be retained or disclosed.
+
+Chat is the default output. External file output needs an explicit user-selected path, verified outside the target after link resolution, and safe non-overwriting creation. When those facilities are unavailable, return chat output. The unchanged Copilot Project Auditor is not the required entry point: it has no file-writing tool and its generic severity wording does not define this module's verdict contract. Use a normal explicitly scoped Copilot task; no auditor profile change is made.
+
 ## Instruction ownership and loading
 
 Each repository's root instructions own routing, precedence, permissions, context-loading policy, the default user-facing communication language, and other always-on constraints. Agent Kit's root `AGENTS.md` governs development of this repository; `templates/project-rules/AGENTS.md` is the canonical starting point merged or adapted into consumer-project root instructions. Each reusable workflow rule has one canonical skill owner; companion skills point to that owner and add only task-local consequences. This avoids maintaining the same checklist in several skills.

@@ -32,4 +32,6 @@ In Agent Kit v1.1.0, Supabase/Postgres and Web Design are optional vendored modu
 
 Copilot consumes the canonical project `.agents/skills` materialization directly, so no `.github/skills` mirror is maintained. The Copilot bridge and optional auditor are the only Copilot-specific adapter files.
 
+`optional/vendored/security-audit` is an adapted third-party optional module from Cloudflare security-audit-skill commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` (MIT). Its canonical package includes SKILL.md, two local review/report references, UPSTREAM.md, the complete license, and explicit-only Codex invocation metadata. It depends only on permitted local source reading/search during use; it ships no execution helpers or upstream validators. The maintainer structural validator is outside the distributed package. Source mapping and adaptation version are recorded in [UPSTREAM.md](../optional/vendored/security-audit/UPSTREAM.md). It uses existing approved optional distribution and is never selected by default.
+
 The `data-visualization` skill was independently authored. External chart research was treated only as evidence; no third-party chart taxonomy, wording, templates, visual system, code, examples, validator, screenshots, or assets were incorporated.

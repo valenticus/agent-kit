@@ -14,6 +14,12 @@ A fresh install creates `AGENTS.md` from the project-rules template when absent,
 
 There is no blind bidirectional sync. Existing project mirrors may be compared with their recorded canonical version, but changes require human-reviewed import. A newer kit version must never overwrite project-specific skills or hooks.
 
+## Adapted security-audit updates
+
+Review Cloudflare updates at an explicit commit, not a moving branch. Preserve the complete MIT notice and review source/evidence, execution, activation, and orchestration changes against the adapted contract. Update the package's UPSTREAM.md source mapping and differences, adaptation version, and optional catalog commit/version together. Never replace the adaptation with the six-phase upstream workflow or absorb project-local edits automatically.
+
+Run the manual `validate-security-audit.mjs`, `validate-kit.mjs`, and disposable `validate-installer.mjs` checks after a package change; the installer suite requires PowerShell. Distribution checks establish copying and overwrite behavior, not agent compliance, OS isolation, or production security. Do not add behavioral sessions, automatic verification hooks, dependency fetching, or target execution as part of updating this package. Deployment to an existing consumer remains a separately approved installation with overwrite conflicts surfaced for review.
+
 ## Versioning
 
 - PATCH: wording, bug fixes, validation fixes without intended contract change.

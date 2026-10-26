@@ -11,7 +11,6 @@ const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const installer = path.join(root, 'scripts', 'install', 'install.ps1');
 const installValidator = path.join(root, 'scripts', 'validation', 'validate-install.mjs');
-const workspace = await mkdtemp(path.join(tmpdir(), 'agent-kit-copilot-'));
 const combinations = [
   ['copilot'],
   ['codex', 'copilot'],
@@ -24,7 +23,22 @@ async function exists(file) {
   try { await stat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-const shell = await execFileAsync('powershell', ['-NoProfile', '-Command', 'exit 0']).then(() => 'powershell', () => 'pwsh');
+let shell;
+for (const executable of ['pwsh', 'powershell']) {
+  try {
+    const { stdout } = await execFileAsync(executable, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()']);
+    shell = executable;
+    console.log(`PowerShell executable: ${shell}; version: ${stdout.trim()}`);
+    break;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+if (!shell) {
+  console.error('BLOCKED: installer validation requires pwsh (PowerShell 7) or powershell (Windows PowerShell); neither executable was found.');
+  process.exit(1);
+}
+const workspace = await mkdtemp(path.join(tmpdir(), 'agent-kit-copilot-'));
 
 // skills === null selects the explicit -NoSkills switch instead of -Skills.
 async function runInstall(project, tools, extra = [], skills = 'safe-change') {
@@ -48,6 +62,7 @@ try {
 
     const sharedEntries = await readdir(path.join(project, '.agents', 'skills'));
     if (sharedEntries.length !== 1 || sharedEntries[0] !== 'safe-change') throw new Error(`${tools}: shared skill destination was not materialized exactly once`);
+    if (await exists(path.join(project, '.agents', 'skills', 'security-audit'))) throw new Error('security-audit installed without explicit optional selection');
     if (tools.includes('cline')) {
       const shared = await readFile(sharedSkill);
       const mirror = await readFile(path.join(project, '.cline', 'skills', 'safe-change', 'SKILL.md'));
@@ -148,7 +163,59 @@ try {
     return result.sort().join('\n');
   }
   const { mkdir, writeFile } = await import('node:fs/promises');
+  // Real PowerShell installer checks; no model sessions or target execution.
+  const defaultProject = path.join(workspace, 'default-selection');
+  await mkdir(defaultProject);
+  await execFileAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-ProjectRoot', defaultProject, '-Tools', 'codex']);
+  const defaultNames = ['safe-change', 'debugging', 'final-audit', 'product-ux', 'mobile-design', 'design-critique', 'security', 'ui'].sort();
+  if ((await readdir(path.join(defaultProject, '.agents', 'skills'))).sort().join() !== defaultNames.join()) throw new Error('default installation changed');
+  for (const name of defaultNames) {
+    const source = await readFile(path.join(root, 'core', 'skills', name, 'SKILL.md'));
+    if (!source.equals(await readFile(path.join(defaultProject, '.agents', 'skills', name, 'SKILL.md')))) throw new Error(`${name}: default skill content changed`);
+  }
+  async function packageFiles(directory, prefix = '') {
+    const files = [];
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) files.push(...await packageFiles(path.join(directory, entry.name), `${prefix}${entry.name}/`));
+      else files.push(`${prefix}${entry.name}`);
+    }
+    return files.sort();
+  }
+  const auditSource = path.join(root, 'optional', 'vendored', 'security-audit');
+  const auditFiles = await packageFiles(auditSource);
+  for (const tools of [['codex'], ['cline'], ['kilo'], ['copilot'], ['claude'], ['codex', 'cline', 'kilo', 'copilot', 'claude']]) {
+    const project = path.join(workspace, `security-audit-${tools.join('-')}`);
+    await mkdir(project);
+    await writeFile(path.join(project, 'AGENTS.md'), '# Existing project rules\n');
+    await runInstall(project, tools, ['-OptionalSkills', 'security-audit']);
+    if (await readFile(path.join(project, 'AGENTS.md'), 'utf8') !== '# Existing project rules\n') throw new Error('optional install changed project instructions');
+    const destinations = tools.includes('cline') ? ['.cline/skills/security-audit'] : [];
+    if (tools.some((tool) => tool !== 'cline')) destinations.push('.agents/skills/security-audit');
+    if (tools.includes('claude')) destinations.push('.claude/skills/security-audit');
+    for (const destination of destinations) {
+      const installed = path.join(project, destination);
+      if ((await packageFiles(installed)).join('\n') !== auditFiles.join('\n')) throw new Error(`${destination}: incomplete optional package`);
+      for (const file of auditFiles) {
+        if (!(await readFile(path.join(auditSource, file))).equals(await readFile(path.join(installed, file)))) throw new Error(`${destination}/${file}: optional copy differs`);
+      }
+    }
+    if (tools.includes('cline') && tools.length === 1 && await exists(path.join(project, '.agents'))) throw new Error('Cline-only optional install gained a shared copy');
+    if (tools.some((tool) => tool !== 'cline')) await execFileAsync(process.execPath, [installValidator, project]);
+    const before = await snapshot(project);
+    let refused = false;
+    try { await runInstall(project, tools, ['-OptionalSkills', 'security-audit']); }
+    catch (error) {
+      if (!/Refusing to overwrite/.test(`${error.stdout ?? ''}${error.stderr ?? ''}`)) throw error;
+      refused = true;
+    }
+    if (!refused || await snapshot(project) !== before) throw new Error('optional reinstall overwrote files or left partial changes');
+    for (const unexpected of ['.kilo/skills', '.github/skills', 'REPORT.md', 'findings.json', 'coverage-ledger.json']) {
+      if (await exists(path.join(project, unexpected))) throw new Error(`optional installation created ${unexpected}`);
+    }
+  }
   const conflicts = [
+    ['optional shared conflict', ['codex', 'cline'], 'safe-change', ['-OptionalSkills', 'security-audit'], async (p) => { await mkdir(path.join(p, '.agents', 'skills', 'security-audit'), { recursive: true }); await writeFile(path.join(p, '.agents', 'skills', 'security-audit', 'keep.txt'), 'mine'); }],
+    ['optional mirror conflict', ['codex', 'cline'], 'safe-change', ['-OptionalSkills', 'security-audit'], async (p) => { await mkdir(path.join(p, '.cline', 'skills', 'security-audit'), { recursive: true }); await writeFile(path.join(p, '.cline', 'skills', 'security-audit', 'keep.txt'), 'mine'); }],
     ['later skill conflict', ['codex'], 'safe-change,debugging', [], async (p) => mkdir(path.join(p, '.agents', 'skills', 'debugging'), { recursive: true })],
     ['later skill conflict in Cline destination', ['cline'], 'safe-change,debugging', [], async (p) => mkdir(path.join(p, '.cline', 'skills', 'debugging'), { recursive: true })],
     ['Cline conflict with shared destinations free', ['codex', 'cline'], 'safe-change', [], async (p) => mkdir(path.join(p, '.cline', 'skills', 'safe-change'), { recursive: true })],
@@ -266,7 +333,7 @@ try {
   await runInstall(validAncestors, ['codex', 'cline', 'copilot']);
   if (!await exists(path.join(validAncestors, '.cline', 'skills', 'safe-change', 'SKILL.md'))) throw new Error('valid existing ancestor directories were rejected');
 
-  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight including non-directory ancestors.`);
+  console.log(`Validated ${combinations.length} Copilot combinations, 3 legacy tool modes, overwrite safety, shared destinations, mirrors, optional auditor behavior, opt-in data-visualization distribution, security-audit opt-in distribution for all five tools and unchanged defaults, the opt-in Claude adapter, -NoSkills, and zero-mutation global preflight including non-directory ancestors.`);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

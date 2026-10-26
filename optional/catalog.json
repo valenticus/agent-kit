@@ -1,4 +1,8 @@
 {
+  "security-audit": {
+    "kind": "vendored", "version": "1.0.0", "path": "optional/vendored/security-audit", "license": "MIT", "licenseFile": "optional/vendored/security-audit/LICENSE", "upstream": "https://github.com/cloudflare/security-audit-skill", "upstreamCommit": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
+    "recommendWhen": "Only when the user explicitly requests security-audit: an optional source-only, offline, read-only security review without target execution or delegation. Installation does not activate it."
+  },
   "supabase-postgres-best-practices": {
     "kind": "vendored", "version": "1.1.1", "path": "optional/vendored/supabase-postgres-best-practices", "license": "MIT", "licenseFile": "optional/vendored/supabase-postgres-best-practices/LICENSE", "upstream": "https://github.com/supabase/agent-skills",
     "recommendWhen": "The project uses PostgreSQL or Supabase, or the task changes or diagnoses SQL, schema, migrations, RLS, database functions, locking, or database performance."

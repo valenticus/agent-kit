@@ -23,6 +23,12 @@ Installation is an explicit, one-shot operation. It does not start agents, loops
 
 The default `-Skills` selection stays compact. Install `data-visualization` explicitly with `-Skills data-visualization` or include it in a comma-separated core skill selection when visualization decisions are material.
 
+`security-audit` is an adapted optional Cloudflare module, selected only with `-OptionalSkills security-audit`. Installation does not run an audit. On an existing project, use `-Skills @()` from a PowerShell session when adding only this optional module; `-NoSkills` cannot be combined with `-OptionalSkills`. The installer refuses existing destinations, so select tools whose adapter destinations are free rather than reinstalling existing adapters.
+
+Activate it only by explicitly asking to use `security-audit`, for example: "Use security-audit for a source-only review of src/api; report in chat." It performs one sequential offline source pass without target execution, secret-value inspection, subagents, cloud/database MCP, or production access. Reports default to chat; a file requires an explicitly selected safe directory outside the target repository. Its `confirmed` verdict means statically proven and always carries `evidence_basis: source-only` and `runtime_validation: not_performed`; runtime-dependent leads remain `needs_validation`. These instructions do not establish an OS sandbox. Existing core workflows and permissions remain unchanged. See [provenance and differences](optional/vendored/security-audit/UPSTREAM.md).
+
+Maintainers can run `node scripts/validation/validate-security-audit.mjs --fixtures` for local package/provenance and disposable copy/mirror checks and `node scripts/validation/validate-installer.mjs` for real disposable installation checks (requires `powershell` or `pwsh`). Copy fixtures do not substitute for the PowerShell installer suite. These checks do not run agents or establish behavioral compliance.
+
 ## Canonical source-of-truth model
 
 ```text

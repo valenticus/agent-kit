@@ -23,7 +23,7 @@ for (const [name, file] of skillFiles) {
     if (!match || match[1] !== name) errors.push(`${name}: invalid frontmatter`);
   } catch { errors.push(`${name}: missing SKILL.md`); }
 }
-const expectedOptional = ['supabase-postgres-best-practices','vercel-react-best-practices','web-design-guidelines'];
+const expectedOptional = ['security-audit','supabase-postgres-best-practices','vercel-react-best-practices','web-design-guidelines'];
 if (Object.keys(optionalCatalog).sort().join('\n') !== expectedOptional.sort().join('\n')) errors.push('optional catalog has an unexpected module set');
 for (const name of expectedOptional) {
   const module = optionalCatalog[name];
