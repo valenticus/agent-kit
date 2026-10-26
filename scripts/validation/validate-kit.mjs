@@ -122,6 +122,27 @@ else {
     if (forbidden.test(destructiveBlock)) errors.push(`destructive-operations block must not promise absolute safety (${forbidden})`);
   }
 }
+// Multi-agent policy: one writer per working tree, approval before extra agents, and honest worktree limits.
+const multiAgentBlock = managedPolicies.find((entry) => entry.policy === 'multi-agent')?.block;
+if (!multiAgentBlock) errors.push('project rules template lacks the managed multi-agent block');
+else {
+  for (const pattern of [
+    /one agent with write access per working tree/,
+    /Parallel writing agents each use a separate Git worktree and branch/,
+    /only after explicit user approval naming their number, tool, read or write mode, and scope/,
+    /Never start costly parallel sessions automatically/,
+    /read-only agents may share a working tree while they change no files/,
+    /Check the working-tree state before starting and before writing/,
+    /unexpected changes appear, stop and report/,
+    /Integrate changes from another worktree only after reviewing its diff and with user approval/,
+    /share Git refs and do not isolate production services, databases, or other external resources/,
+  ]) {
+    if (!pattern.test(multiAgentBlock)) errors.push(`multi-agent block is missing required rule ${pattern}`);
+  }
+  if (/\b(?:fully|completely|totally) isolat/i.test(multiAgentBlock)) errors.push('multi-agent block must not claim complete isolation');
+  // Always-on text costs context in every session; keep this block compact.
+  if (Buffer.byteLength(multiAgentBlock) > 1024) errors.push(`multi-agent block is ${Buffer.byteLength(multiAgentBlock)} bytes; keep it within 1024`);
+}
 for (const [rel, patterns] of [
   ['templates/project-rules/AGENTS.md', [/Forbidden operations and targets/]],
   ['templates/project-architecture/SKILL.md', [/Production projects and environments/, /quotas, rate limits, and paid APIs/]],

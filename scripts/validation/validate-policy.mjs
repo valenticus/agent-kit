@@ -75,7 +75,8 @@ try {
   check('update: stale block -> only the block replaced; text before and after preserved; idempotent', () => {
     for (const eol of ['\n', '\r\n']) {
       const stale = [START_MARKER, '## Git authorship', 'old policy text', END_MARKER].join(eol);
-      const before = `# Mine${eol}project rule${eol}${eol}${stale}${eol}${eol}${destructive.replace(/\n/g, eol)}${eol}${eol}## After${eol}keep me${eol}`;
+      const afterGit = canonicalBlocks().slice(1).map((entry) => entry.block).join('\n\n');
+      const before = `# Mine${eol}project rule${eol}${eol}${stale}${eol}${eol}${afterGit.replace(/\n/g, eol)}${eol}${eol}## After${eol}keep me${eol}`;
       const dir = project(before);
       assert.equal(update(dir), 'replace');
       const result = read(dir);
@@ -97,6 +98,7 @@ try {
       reversed: `${END_MARKER}\ntext\n${START_MARKER}\n`,
       'valid Git authorship, destructive-operations start only': `${block}\n\n${startMarker('destructive-operations')}\ntext\n`,
       'destructive-operations duplicated': `${block}\n\n${destructive}\n\n${destructive}\n`,
+      'valid blocks, multi-agent end before start': `${block}\n\n${destructive}\n\n${endMarker('multi-agent')}\n${startMarker('multi-agent')}\n`,
     };
     for (const [name, content] of Object.entries(cases)) {
       const dir = project(content);
@@ -309,7 +311,7 @@ try {
     assert.deepEqual(fs.readdirSync(dir), ['AGENTS.md'], 'refusal must not leave files');
   };
   check('managed policies are discovered from the template in order', () => {
-    assert.deepEqual(canonicalBlocks().map((entry) => entry.policy), ['git-authorship', 'destructive-operations']);
+    assert.deepEqual(canonicalBlocks().map((entry) => entry.policy), ['git-authorship', 'destructive-operations', 'multi-agent']);
     assert.deepEqual(canonicalBlocks(multiKit).map((entry) => entry.policy), ['git-authorship', 'example-alpha', 'example-beta']);
     assert.equal(canonicalBlock(multiKit), block, 'Git-authorship block is unchanged by other policies');
     assert.equal(canonicalBlock(multiKit, 'example-beta'), beta);
@@ -412,26 +414,31 @@ try {
       try { refusesWith(dir, badKit, pattern); } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
     }
   });
-  check('v1.8.0 projects gain only the destructive-operations block, right after Git authorship; project text, EOL, and BOM kept; idempotent', () => {
+  check('older projects (v1.8.0: Git authorship only; earlier v1.9.0 work: fewer blocks) gain only the missing blocks after their managed blocks; project text, EOL, and BOM kept; idempotent', () => {
     const bom = Buffer.from([0xef, 0xbb, 0xbf]);
-    // v1.8.0 shipped the same Git-authorship block and no other managed block.
-    const v180Template = normalizeEol(templateText).replace(`\n\n${destructive}`, '');
-    assert.ok(!v180Template.includes(startMarker('destructive-operations')) && v180Template.includes(block));
-    for (const text of [v180Template, `# Project rules\n\n${block}\n`, `# Project rules\n${block}\n\n## Mine\nkeep\n`]) {
-      const expected = text.replace(block, `${block}\n\n${destructive}`);
-      for (const [encode, prefix] of [[(value) => value, Buffer.alloc(0)], [crlf, Buffer.alloc(0)], [crlf, bom]]) {
-        const dir = project();
-        fs.writeFileSync(path.join(dir, 'AGENTS.md'), Buffer.concat([prefix, Buffer.from(encode(text))]));
-        assert.equal(update(dir), 'append');
-        const after = fs.readFileSync(path.join(dir, 'AGENTS.md'));
-        assert.ok(after.equals(Buffer.concat([prefix, Buffer.from(encode(expected))])), 'only the new block is inserted');
-        assert.equal(update(dir), 'noop');
-        assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(after), 'second run is byte-identical');
+    const shipped = canonicalBlocks().map((entry) => entry.block);
+    assert.equal(normalizeEol(templateText).split(managed).length, 2, 'the template keeps its managed blocks adjacent');
+    // Each shorter prefix of the shipped policy list is an older project's managed set; v1.8.0 had only Git authorship.
+    for (let count = 1; count < shipped.length; count++) {
+      const older = shipped.slice(0, count).join('\n\n');
+      const olderTemplate = normalizeEol(templateText).replace(managed, older);
+      assert.ok(!olderTemplate.includes(startMarker(canonicalBlocks()[count].policy)));
+      for (const text of [olderTemplate, `# Project rules\n\n${older}\n`, `# Project rules\n${older}\n\n## Mine\nkeep\n`]) {
+        const expected = text.replace(older, managed);
+        for (const [encode, prefix] of [[(value) => value, Buffer.alloc(0)], [crlf, Buffer.alloc(0)], [crlf, bom]]) {
+          const dir = project();
+          fs.writeFileSync(path.join(dir, 'AGENTS.md'), Buffer.concat([prefix, Buffer.from(encode(text))]));
+          assert.equal(update(dir), 'append');
+          const after = fs.readFileSync(path.join(dir, 'AGENTS.md'));
+          assert.ok(after.equals(Buffer.concat([prefix, Buffer.from(encode(expected))])), 'only the missing blocks are inserted');
+          assert.equal(update(dir), 'noop');
+          assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md')).equals(after), 'second run is byte-identical');
+        }
       }
     }
   });
 
-  console.log(`Validated ${checks} managed policy block checks (canonical parity, marker strictness, encoding/BOM, links, mode, temp cleanup, entrypoint, create/append/replace/no-op, malformed refusal, EOL, idempotency, multiple named policies with independent updates, placement, all-or-nothing refusal, and v1.8.0 compatibility).${skipped.length ? ` Not exercised on this host: ${skipped.join('; ')}.` : ''}`);
+  console.log(`Validated ${checks} managed policy block checks (canonical parity, marker strictness, encoding/BOM, links, mode, temp cleanup, entrypoint, create/append/replace/no-op, malformed refusal, EOL, idempotency, multiple named policies with independent updates, placement, all-or-nothing refusal, and upgrades from v1.8.0 and earlier policy sets).${skipped.length ? ` Not exercised on this host: ${skipped.join('; ')}.` : ''}`);
 } finally {
   fs.rmSync(workspace, { recursive: true, force: true });
 }

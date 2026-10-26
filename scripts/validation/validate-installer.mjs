@@ -356,18 +356,20 @@ try {
   await failsWith(runUpdate(malformedAgents), /Policy update refused/, 'malformed markers');
   if (await snapshot(malformedAgents) !== malformedBefore) throw new Error('-UpdatePolicies mutated a project with malformed markers');
 
-  // A v1.8.0 AGENTS.md (Git authorship only) with project sections, CRLF, and a BOM gains only the destructive-operations
-  // block right after Git authorship, idempotently; a stale block is replaced in the same single write.
-  const templateBlock = (policy) => canonicalTemplate.toString('utf8').replace(/\r\n/g, '\n').match(new RegExp(`<!-- agent-kit:${policy}:start -->[\\s\\S]*?<!-- agent-kit:${policy}:end -->`))[0];
-  const block = templateBlock('git-authorship');
+  // A v1.8.0 AGENTS.md (Git authorship only) with project sections, CRLF, and a BOM gains only the newer managed blocks
+  // right after Git authorship, in template order and idempotently; a stale block is replaced in the same single write.
+  const templateText = canonicalTemplate.toString('utf8').replace(/\r\n/g, '\n');
+  const managedBlocks = [...templateText.matchAll(/^<!-- agent-kit:([a-z0-9-]+):start -->$[\s\S]*?^<!-- agent-kit:\1:end -->$/gm)].map((match) => match[0]);
+  if (managedBlocks.length < 3) throw new Error('expected Git-authorship, destructive-operations, and multi-agent template blocks');
+  const block = managedBlocks[0];
   const legacyText = (policy) => `# Project rules\r\n\r\n## Mine\r\nkeep\r\n\r\n${policy.replace(/\n/g, '\r\n')}\r\n\r\n## After\r\nkeep too\r\n`;
   const bom = Buffer.from([0xef, 0xbb, 0xbf]);
   const legacy = path.join(workspace, 'policy-legacy');
   await mkdir(legacy);
-  const upgradedBytes = Buffer.concat([bom, Buffer.from(legacyText(`${block}\n\n${templateBlock('destructive-operations')}`))]);
+  const upgradedBytes = Buffer.concat([bom, Buffer.from(legacyText(managedBlocks.join('\n\n')))]);
   await writeFile(path.join(legacy, 'AGENTS.md'), Buffer.concat([bom, Buffer.from(legacyText(block))]));
   await runUpdate(legacy);
-  if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(upgradedBytes)) throw new Error('-UpdatePolicies did not add only the destructive-operations block to a v1.8.0 AGENTS.md');
+  if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(upgradedBytes)) throw new Error('-UpdatePolicies did not add only the newer managed blocks to a v1.8.0 AGENTS.md');
   await runUpdate(legacy);
   if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(upgradedBytes)) throw new Error('-UpdatePolicies is not idempotent for a v1.8.0 AGENTS.md');
   await writeFile(path.join(legacy, 'AGENTS.md'), Buffer.concat([bom, Buffer.from(legacyText('<!-- agent-kit:git-authorship:start -->\nold\n<!-- agent-kit:git-authorship:end -->'))]));
@@ -377,6 +379,10 @@ try {
   await writeFile(path.join(legacy, 'AGENTS.md'), halfBefore);
   await failsWith(runUpdate(legacy), /Policy update refused/, 'malformed destructive-operations markers');
   if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(halfBefore)) throw new Error('-UpdatePolicies partially wrote a file with a malformed destructive-operations block');
+  const duplicateMultiAgent = Buffer.concat([bom, Buffer.from(legacyText(`${managedBlocks[0]}\n\n${managedBlocks[1]}\n\n<!-- agent-kit:multi-agent:start -->\n<!-- agent-kit:multi-agent:start -->`))]);
+  await writeFile(path.join(legacy, 'AGENTS.md'), duplicateMultiAgent);
+  await failsWith(runUpdate(legacy), /Policy update refused/, 'duplicate multi-agent markers');
+  if (!(await readFile(path.join(legacy, 'AGENTS.md'))).equals(duplicateMultiAgent)) throw new Error('-UpdatePolicies partially wrote a file with duplicate multi-agent markers');
 
   // Valid pre-existing directory ancestors must keep working.
   const validAncestors = path.join(workspace, 'valid-ancestors');

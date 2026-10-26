@@ -50,6 +50,17 @@ Treat production as read-only by default, which does not permit unbounded or sen
 This policy is an instruction, not a technical control: it does not block commands and cannot guarantee that no damage occurs. Enforcement depends on each tool's own permissions and sandboxing, which Agent Kit does not configure automatically.
 <!-- agent-kit:destructive-operations:end -->
 
+<!-- agent-kit:multi-agent:start -->
+## Multiple agents
+
+- Allow one agent with write access per working tree. Parallel writing agents each use a separate Git worktree and branch.
+- Start additional agents, subagents, or parallel sessions only after explicit user approval naming their number, tool, read or write mode, and scope. Never start costly parallel sessions automatically.
+- Approved read-only agents may share a working tree while they change no files.
+- Check the working-tree state before starting and before writing. If unexpected changes appear, stop and report them.
+- Integrate changes from another worktree only after reviewing its diff and with user approval.
+- Worktrees separate files only: they share Git refs and do not isolate production services, databases, or other external resources.
+<!-- agent-kit:multi-agent:end -->
+
 ## Repository discipline
 
 - Preserve the canonical-source and clean-room boundaries documented in this repository. Do not copy project-specific or license-incompatible material into universal methodology.

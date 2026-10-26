@@ -50,6 +50,17 @@ Treat production as read-only by default, which does not permit unbounded or sen
 This policy is an instruction, not a technical control: it does not block commands and cannot guarantee that no damage occurs. Enforcement depends on each tool's own permissions and sandboxing, which Agent Kit does not configure automatically.
 <!-- agent-kit:destructive-operations:end -->
 
+<!-- agent-kit:multi-agent:start -->
+## Multiple agents
+
+- Allow one agent with write access per working tree. Parallel writing agents each use a separate Git worktree and branch.
+- Start additional agents, subagents, or parallel sessions only after explicit user approval naming their number, tool, read or write mode, and scope. Never start costly parallel sessions automatically.
+- Approved read-only agents may share a working tree while they change no files.
+- Check the working-tree state before starting and before writing. If unexpected changes appear, stop and report them.
+- Integrate changes from another worktree only after reviewing its diff and with user approval.
+- Worktrees separate files only: they share Git refs and do not isolate production services, databases, or other external resources.
+<!-- agent-kit:multi-agent:end -->
+
 Default to one primary skill for the requested outcome. Add a companion only for a distinct material risk, boundary, or required deliverable. One may be added with clear justification; each beyond that requires a distinct named reason. Security or irreversible data-integrity requirements may exceed this budget. Do not stack overlapping workflows for reassurance; load another skill later if investigation discovers a new boundary. Pure reading or explanation does not automatically require an implementation skill.
 
 Discover context nearest-first: this file, the primary skill, any mandatory justified companion, the nearest relevant project or module documentation, and only references required by the active task. Nearby documents cannot silently override higher-level project rules. Avoid preloading documentation trees and large static maps; add explicit pointers only for exceptional authoritative documents.
