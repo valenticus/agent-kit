@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_POLICY, canonicalBlocks, locateBlock, normalizeEol, policyLabel } from '../install/policy-block.mjs';
+import { CATALOG_RELATIVE, catalogErrors, loadCatalog } from '../install/skill-catalog.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const errors = [];
@@ -39,7 +40,7 @@ for (const name of expectedOptional) {
     if (!/MIT License/.test(license) || !/Copyright/.test(license)) errors.push(`${name}: incomplete license notice`);
   } else if (!module.installHint) errors.push(`${name}: referenced module lacks installHint`);
 }
-const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs','scripts/install/policy-block.mjs','scripts/validation/validate-policy.mjs'];
+const required = ['AGENTS.md','README.md','VERSION','optional/catalog.json','docs/architecture.md','docs/source-inventory.md','docs/promotion-and-updates.md','docs/attribution.md','templates/bootstrap-prompt.md','templates/project-rules/AGENTS.md','adapters/codex/README.md','adapters/cline/README.md','adapters/kilo/README.md','adapters/copilot/README.md','adapters/copilot/copilot-instructions.md','adapters/copilot/project-auditor.agent.md','scripts/validation/validate-installer.mjs','scripts/validation/validate-data-visualization.mjs','adapters/claude/README.md','adapters/claude/claude-bootstrap.mjs','adapters/claude/CLAUDE.template.md','scripts/install/claude-adapter.mjs','scripts/validation/validate-claude.mjs','scripts/install/policy-block.mjs','scripts/validation/validate-policy.mjs','scripts/install/skill-catalog.mjs','scripts/install/skill-catalog.json','scripts/install/skill-update.mjs'];
 for (const rel of required) { try { await stat(path.join(root, rel)); } catch { errors.push(`missing ${rel}`); } }
 const version = (await readFile(path.join(root, 'VERSION'), 'utf8')).trim();
 if (version !== '1.9.1') errors.push(`unexpected VERSION ${version}`);
@@ -261,5 +262,9 @@ const sharedPrinciples = await readFile(path.join(root, 'core', 'methodology', '
 if (!/Support each material success claim with evidence that remains valid for that claim/.test(sharedPrinciples) || !/stale, manual, external, or unrun checks/.test(sharedPrinciples)) errors.push('core/methodology/principles.md lacks the evidence-to-claim principle');
 const readmeText = await readFile(path.join(root, 'README.md'), 'utf8');
 if (!/\]\(core\/methodology\/behavioral-testing\.md\)/.test(readmeText)) errors.push('README.md must link to core/methodology/behavioral-testing.md');
+// Skill catalog: well-formed, unambiguous, limited to distributed skills, and matching the working tree for VERSION.
+let skillCatalog = null;
+try { skillCatalog = loadCatalog(root); } catch (error) { errors.push(`${CATALOG_RELATIVE}: ${error.message}`); }
+if (skillCatalog !== null) for (const problem of catalogErrors(skillCatalog, root)) errors.push(`${CATALOG_RELATIVE}: ${problem}`);
 if (errors.length) { console.error(errors.join('\n')); process.exitCode = 1; }
-else console.log(`Validated ${skillFiles.length} core/project skill schemas, ${expectedOptional.length} optional modules, licenses, agents, Copilot adapter, links, version, and no unnecessary skill mirrors.`);
+else console.log(`Validated ${skillFiles.length} core/project skill schemas, ${expectedOptional.length} optional modules, licenses, agents, Copilot adapter, links, version, the skill catalog, and no unnecessary skill mirrors.`);

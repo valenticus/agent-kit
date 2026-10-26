@@ -31,6 +31,12 @@ The initial contract is one sequential source-only/offline/read-only pass with n
 
 Chat is the default output. External file output needs an explicit user-selected path, verified outside the target after link resolution, and safe non-overwriting creation. When those facilities are unavailable, return chat output. The unchanged Copilot Project Auditor is not the required entry point: it has no file-writing tool and its generic severity wording does not define this module's verdict contract. Use a normal explicitly scoped Copilot task; no auditor profile change is made.
 
+## Skill catalog and update planning
+
+[`scripts/install/skill-catalog.json`](../scripts/install/skill-catalog.json) lists every released content version of each distributed skill (core and vendored optional): per version, the releases that shipped it and a SHA-256 of each file after CRLF -> LF normalization, keyed by relative path. Maintainers regenerate it from release tags with `node scripts/install/skill-catalog.mjs generate` (full history and tags required) and verify it with `check`; `validate-kit.mjs` only reads the committed file and requires it to match the working tree for the current VERSION.
+
+[`scripts/install/skill-update.mjs`](../scripts/install/skill-update.mjs) is a read-only planner (`node scripts/install/skill-update.mjs plan --project <dir> [--skills a,b] [--json]`). It inspects `.agents/skills` and `.cline/skills`, classifies each installed kit skill as current, update (an older released version), or conflict (modified, extra, or missing files, links, or special files), skips third-party skills, and blocks skills roots reached through links or outside the project and a `.claude/skills` that is not the link to `.agents/skills`. It never writes; no executor or installer switch exists yet. A hash match proves that installed content is identical to a released version, not that Agent Kit installed it.
+
 ## Instruction ownership and loading
 
 Each repository's root instructions own routing, precedence, permissions, context-loading policy, the default user-facing communication language, and other always-on constraints. Agent Kit's root `AGENTS.md` governs development of this repository; `templates/project-rules/AGENTS.md` is the canonical starting point merged or adapted into consumer-project root instructions. Each reusable workflow rule has one canonical skill owner; companion skills point to that owner and add only task-local consequences. This avoids maintaining the same checklist in several skills.

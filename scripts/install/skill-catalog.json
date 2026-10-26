@@ -1,0 +1,379 @@
+{
+  "format": 1,
+  "hash": "sha256-lf",
+  "releases": [
+    "1.0.0",
+    "1.1.0",
+    "1.2.0",
+    "1.2.1",
+    "1.3.0",
+    "1.4.0",
+    "1.5.0",
+    "1.6.0",
+    "1.7.0",
+    "1.8.0",
+    "1.9.0",
+    "1.9.1"
+  ],
+  "skills": {
+    "data-visualization": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "a363aec4f57df59182c59f674bd1baf64b6c92817f81cea9ff91e8cacdd51eaa",
+            "references/accessibility.md": "b6e989ca79222e9c22618591b6e0dab086010fa88fa1294f60285101c73dd799",
+            "references/chart-selection.md": "1fcc0cc1bcbab9334246368759b2710a919e4551c6f888c3d1131d5a86c7906b",
+            "references/responsive-interaction.md": "a5951b636a6d7f2f95caf8d28e7d2c7ad49e561a1528de4c6e8489d75d0fa5c8",
+            "references/validation-and-anti-patterns.md": "d7ae75a8716f98087e4bef971b0488032d24285547c725df54e359d2481a2bd7",
+            "references/visual-composition.md": "dd9d5016fb677a700cc33b75bc412629cd2b1ac967635fdca15689b913be4c63",
+            "references/visual-encoding.md": "fdb15c082c79d3fd0c6976ddf91a515310c4517deb887fe66f44df7c8084c869"
+          }
+        }
+      ]
+    },
+    "debugging": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0"
+          ],
+          "files": {
+            "SKILL.md": "0d5cee33d9f2d46178f22f631fe01c786d1aefaf19257018ea15bc3ff350e392"
+          }
+        },
+        {
+          "releases": [
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0"
+          ],
+          "files": {
+            "SKILL.md": "eb849b1428664c89b2f9cad4a1e3b007e47b4b240285a78b123cf7a692d276d3"
+          }
+        },
+        {
+          "releases": [
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "514bfdf8a2e03a4243a1ca1153668a89c1f36b62b1d66ab87d546861cdd1cd89"
+          }
+        }
+      ]
+    },
+    "design-critique": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "152a9bd749001253c1fbdf451b62cffce9031b2de24beb55023894a083dfb7e4"
+          }
+        }
+      ]
+    },
+    "final-audit": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "2aabe89101a9124b98108158f9eda51df9e48550febaa5ac5a3a3399b7c2cec9"
+          }
+        }
+      ]
+    },
+    "handoff": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "b6f0ba8a70c5ac5ac6cb33a3aa0b6679eb9c01a78997628a43d9a7363113d77e"
+          }
+        }
+      ]
+    },
+    "mobile-design": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "cf9b4db3a636209439f6bf5facc4f28f1573769a970cbe11161bce170d54862d"
+          }
+        }
+      ]
+    },
+    "product-ux": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "369ace1b69759fa4630f783a93395f02f5a0ea14aea123f28401c0a87e6e34ad"
+          }
+        }
+      ]
+    },
+    "safe-change": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "dca98b9508c17f038c3cea2a3a0b19897ccddbea7e634096d8313f3f23cc0a87"
+          }
+        }
+      ]
+    },
+    "security": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "7c312d4740cd87dde644049b9256a0841a56f5ef51ae0caf9006e645d96a3081"
+          }
+        }
+      ]
+    },
+    "security-audit": {
+      "kind": "vendored",
+      "versions": [
+        {
+          "releases": [
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "LICENSE": "e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391",
+            "SKILL.md": "1f97ecbeeb1311b6ab8c685111f62ace4910d93d35fe9bd0bf3d3df1c8803206",
+            "UPSTREAM.md": "10d7692467418a7ab19e295063fde0fe5aa1bf745ed8db28e4c567720d5b7d26",
+            "agents/openai.yaml": "a1499d95abd8447558c535fe5554adcc3c9b988a0a39264a6283d430effe1e94",
+            "references/report-format.md": "df90f2aa1259c9ca2eac6e5346e53f0363f8c4e9ba0ad3621cdbfbbbd09d83fb",
+            "references/source-review.md": "88ad7439c00ae5b19487f57d8fa8fb723abe4584ab0aa54aabf49ca74e39a878"
+          }
+        }
+      ]
+    },
+    "supabase-postgres-best-practices": {
+      "kind": "vendored",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "CHANGELOG.md": "751ad110037c85d400018c9894716a04fa46357ff55c22b1169b280752e19e88",
+            "LICENSE": "e6e972dba808fb9d80863fe90ca222a47710cb850f6e6e2af95cdc0d022f79bd",
+            "SKILL.md": "ad65e776f45e761bafc609d3f506c77c1032225aa65e0c4c02f241b8071e5855",
+            "references/_contributing.md": "191e039e7d94764e6073410b513b559f9a594e0fdf0252a30c2a2986df2ab3bc",
+            "references/_sections.md": "c9e992612b422c7122de0b7542ebc2450db283edaab08cfe86c6d657fcccccd5",
+            "references/_template.md": "6299954250f212caabe339d752c3e5313a8e07d1a182a4e4b425baee91df1bd2",
+            "references/advanced-full-text-search.md": "40c2606bbb4c4dce31308f201b24cc7f58c7df05b1d9c6856fe2b888d3b7cf28",
+            "references/advanced-jsonb-indexing.md": "24cacf6a8bc35901dd566d24502ce8e57f810a5c196b897e61d52726e521d106",
+            "references/conn-idle-timeout.md": "630588902c00fcec59a5988cc5d042f76dcf2c923a535abfd8c47dca205eaed5",
+            "references/conn-limits.md": "11b2a67a7c7679cbbc5d807bbb17e69c98484a581d0c8b929c03408f412b81b2",
+            "references/conn-pooling.md": "88cf086bf98ba865d2e9d0579974e1366b14157619d6a93e7da77be91084e4a5",
+            "references/conn-prepared-statements.md": "174e9332fe3dda5c99b2b00159fb1915ae36c00bab3a7882c14e73e4344e946e",
+            "references/data-batch-inserts.md": "531933b82d6a622d0fae29e0ea80be6fe5d78655adf2804c271ea84a1930de37",
+            "references/data-n-plus-one.md": "21a44905e5b16a42741892ec34bb1bfef124d049b140a76934a9acd0f46f5fc2",
+            "references/data-pagination.md": "73c9fa10a3d439bedea0e11b640bd25bf30dd50f0d9006cf85baf7c3151543fa",
+            "references/data-upsert.md": "2612af83b20a2701dde30ef1f8d7efd26b7e9eef84717226b8f038a2d2150ff7",
+            "references/lock-advisory.md": "c88d259dbf81c3771438f59a165f7eab8acd09999dd370bdf807521c73f35aab",
+            "references/lock-deadlock-prevention.md": "09aee46f51d7178c8e55fe056cd5a94a64ba2c122fe418e6900cd99f297b2347",
+            "references/lock-short-transactions.md": "5aa7f61095916986d39644b446cdbcd2bacca7ef698a3bb50b3f82dd60207602",
+            "references/lock-skip-locked.md": "6c45077f430f29cd9cd8f448c94d578e827e7bd023fcdaf717a756acb116fa4b",
+            "references/monitor-explain-analyze.md": "4cb67ffbf8e57f2e5b380b0beb4242528b513723ce314a2c2ffcf083bd4203d7",
+            "references/monitor-pg-stat-statements.md": "89dca99d4e894fcbdcac136be7ad9fbc03d1342904f065c1b198dc9cf495f098",
+            "references/monitor-vacuum-analyze.md": "2892272011710eb49b3f185ec12f15ce9ce4c365792c672f6e2a9c90da426a1a",
+            "references/query-composite-indexes.md": "73e42424e671f0266e74fdb220db3196790f69fb43e2b19c7b9483eb4971b554",
+            "references/query-covering-indexes.md": "daf2a7f0477fb7357b62b5fb5b185b1995a77a186347e45cb780e25e7a7589b6",
+            "references/query-index-types.md": "472a74f22c2df203bd0154999b3a5a0187cca2ab3d9a3978e305bb7c32f1a282",
+            "references/query-missing-indexes.md": "91ad8b0ff4365704b4830a7f077c6f140f7140fd5d3ce5cd0b92b160cf9e25f1",
+            "references/query-partial-indexes.md": "6448982bc8558c6555284958edc331b29239c6a0130e6b4501dd6d4da607a6dd",
+            "references/schema-constraints.md": "90e8efda3e9e81095e642911ad4aae2809d160f29414338fa997253238f510f8",
+            "references/schema-data-types.md": "e01b58c14c7f3f65d8ead580b9a4fcf70b83baaab0f9a5f83c569c9fd113e8c8",
+            "references/schema-foreign-key-indexes.md": "7587713d12a65a212365459b3d39e4717d8a79e4073b10bd62f1054d8192c0dd",
+            "references/schema-lowercase-identifiers.md": "4bc80f70865f2390872591f326c8a6be6456a0aeb5a7e5a2475d7cd9d43059ab",
+            "references/schema-partitioning.md": "541e13fbeaf4bb1485c9059d4c9417dbdb766cf16f4237cd63a04ada7ec45b90",
+            "references/schema-primary-keys.md": "3c8beabef82066f9a0838b926da0885117fd2d9a263aaf84cb5ca9e5f0d400e9",
+            "references/security-privileges.md": "095909274a4fb43df785d7144cf674eeb40284d2d45628f14af4108737b93663",
+            "references/security-rls-basics.md": "e04dd1a3a382aafdaaa73fe9f7976352acdde6e90c2a2470d281b94d4f44b096",
+            "references/security-rls-performance.md": "2e1faeca7d5746e246b1c78f9492fe2a9cfa41c4d7fa1e23c402d58fa18ea014"
+          }
+        }
+      ]
+    },
+    "ui": {
+      "kind": "core",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0"
+          ],
+          "files": {
+            "SKILL.md": "5193e70eff08352d95468f3bd684f18faa38f6b73a857a244671c3337fa2de98"
+          }
+        },
+        {
+          "releases": [
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "a6de5cf20932c80d13b66cd783ed7181432f2fd4c8d6d6c11715cc8cb4e2bef8"
+          }
+        }
+      ]
+    },
+    "web-design-guidelines": {
+      "kind": "vendored",
+      "versions": [
+        {
+          "releases": [
+            "1.0.0",
+            "1.1.0",
+            "1.2.0",
+            "1.2.1",
+            "1.3.0",
+            "1.4.0",
+            "1.5.0",
+            "1.6.0",
+            "1.7.0",
+            "1.8.0",
+            "1.9.0",
+            "1.9.1"
+          ],
+          "files": {
+            "SKILL.md": "d6416f3084c407a2872b2ba0177e78e775a2b4af1a17b58151692315c6a090a6",
+            "references/LICENSE": "6cd1609c9c12233507cdd2ce0d32e9a721e3c27494951be06b90090deeeb7af2",
+            "references/checklist.md": "5a775e6411f790f518dbc9c1fa7c50a89e6873502d9a3530a6eb223a590bcfe8"
+          }
+        }
+      ]
+    }
+  }
+}
