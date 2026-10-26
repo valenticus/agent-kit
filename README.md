@@ -44,15 +44,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/instal
 ```
 
 - A skill is updated only when its files match a released Agent Kit version exactly (line endings aside). A skill with edited, added, or missing files is a conflict, and any conflict or blocker in the selection stops the whole update with nothing changed; narrow the selection with `-Skills` or resolve the conflict first. Third-party skills are skipped, and absent skills are reported but never installed.
+- As for installation, `-Skills` names core skills and `-OptionalSkills` names vendored optional modules; referenced modules are never installed or updated by the kit.
 - `-UpdateSkills` is standalone: it cannot be combined with `-Tools`, `-NoSkills`, `-UpdatePolicies`, or `-CopilotAuditor`, and `-DryRun` requires it. It never commits, stashes, or runs other Git commands; review and commit the changed files yourself.
-- Close agent sessions that read these skills (Claude Code, Codex, Cline, Kilo, Copilot) before updating. Each skill is replaced with two renames and is briefly absent in between, and a session could read some skills before and some after the update.
-- Only one update runs per project; a second one is refused. If an update is interrupted (crash, power loss, a locked file on Windows), skills stay intact or are restorable, `.agent-kit-update.lock` remains, and further updates are refused until you run:
+- Close agent sessions that read these skills (Claude Code, Codex, Cline, Kilo, Copilot) before updating. Each skill is replaced with two renames and is briefly absent in between, and a session could read some skills before and some after the update. On Windows, a file or folder another program holds open is retried for about 1.5 seconds before the update stops.
+- Only one update runs per project; a second one is refused. If an update is interrupted (a crash, a killed process, or a file that stays locked on Windows), each skill is left either in its previous or its new version, or with the previous version kept in `.agents/.agent-kit-update` or `.cline/.agent-kit-update`. `.agent-kit-update.lock` remains; further updates and ordinary installs are refused, and `validate-install.mjs` fails, until you run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File <kit>/scripts/install/install.ps1 -ProjectRoot <project> -RecoverSkillUpdate
 ```
 
-  Recovery completes a replacement that had already happened, otherwise restores the previous version, and removes the staged copies. It refuses, changing nothing, when it cannot prove that the leftovers belong to that update (for example edited staging files, unknown entries in `.agents/.agent-kit-update`, or a lock it did not write); review those manually.
+  Recovery completes a replacement that had already happened, otherwise restores the previous version, and removes the staged copies, including copies whose removal was itself interrupted. It refuses, changing nothing, when it cannot prove that the leftovers belong to that update (for example edited staging files, unknown entries in `.agents/.agent-kit-update`, or an incomplete lock); review those manually. If it reports that a previous copy may contain edits, move that directory out of the staging area and run recovery again.
+
+  Updates do not force data to disk (`fsync`), so after a sudden power loss or operating-system crash the file system may not reflect the last steps; recovery then refuses whatever it cannot prove, and the previous copy is kept for manual review rather than guaranteed to be restored automatically. Never commit `.agent-kit-update.lock`, `.agents/.agent-kit-update/`, or `.cline/.agent-kit-update/`; they exist only while an update runs or after it was interrupted, and you may add them to `.gitignore`.
 
 Installation is an explicit, one-shot operation. It does not start agents, loops, commits, dependency installation, or synchronization.
 

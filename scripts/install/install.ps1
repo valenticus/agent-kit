@@ -29,10 +29,23 @@ if ($UpdateSkills -or $RecoverSkillUpdate) {
     if ($LASTEXITCODE -ne 0) { throw "-RecoverSkillUpdate stopped (exit $LASTEXITCODE); see the messages above." }
     return
   }
-  # -Skills has a default value, so only explicitly passed names narrow the selection.
-  $selected = @(foreach ($name in @('Skills','OptionalSkills')) {
-    if ($PSBoundParameters.ContainsKey($name)) { $PSBoundParameters[$name] | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } }
-  })
+  # -Skills has a default value, so only explicitly passed names narrow the selection. As for installation, -Skills
+  # names core skills and -OptionalSkills names vendored optional modules.
+  $catalog = Get-Content -Raw -LiteralPath (Join-Path $kitRoot 'optional\catalog.json') | ConvertFrom-Json
+  $selected = @()
+  foreach ($name in @('Skills','OptionalSkills')) {
+    if (-not $PSBoundParameters.ContainsKey($name)) { continue }
+    foreach ($skill in @($PSBoundParameters[$name] | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+      if ($skill -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { throw "Invalid skill name: $skill" }
+      if ($name -eq 'Skills' -and -not (Test-Path -LiteralPath (Join-Path $kitRoot "core\skills\$skill") -PathType Container)) { throw "Unknown core skill: $skill (optional modules are selected with -OptionalSkills)" }
+      if ($name -eq 'OptionalSkills') {
+        $property = $catalog.PSObject.Properties[$skill]
+        if ($null -eq $property) { throw "Unknown optional skill: $skill (core skills are selected with -Skills)" }
+        if ($property.Value.kind -ne 'vendored') { throw "$skill is a referenced optional module; Agent Kit does not install or update it" }
+      }
+      $selected += $skill
+    }
+  }
   $arguments = @('--project', $project.Path)
   if ($PSBoundParameters.ContainsKey('Skills') -or $PSBoundParameters.ContainsKey('OptionalSkills')) {
     if ($selected.Count -eq 0) { throw '-Skills or -OptionalSkills was given without skill names' }
@@ -59,6 +72,12 @@ if ($UpdatePolicies) {
     if ($LASTEXITCODE -ne 0) { throw "Policy $command failed (exit $LASTEXITCODE)" }
   }
   return
+}
+# A skill update that is running or was interrupted owns parts of .agents and .cline; never install around it.
+foreach ($leftover in @('.agent-kit-update.lock', '.agents\.agent-kit-update', '.cline\.agent-kit-update')) {
+  if ($null -ne (Get-Item -LiteralPath (Join-Path $project $leftover) -Force -ErrorAction SilentlyContinue)) {
+    throw "An Agent Kit skill update is running or was interrupted ($leftover exists). Run install.ps1 -ProjectRoot <project> -RecoverSkillUpdate first; nothing was changed."
+  }
 }
 $Tools = @($Tools | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($NoSkills -and ($PSBoundParameters.ContainsKey('Skills') -or $PSBoundParameters.ContainsKey('OptionalSkills'))) { throw '-NoSkills cannot be combined with -Skills or -OptionalSkills' }

@@ -120,7 +120,11 @@ export async function testSkillUpdateCli({ shell, failsWith }) {
         [['-RecoverSkillUpdate', '-Skills', 'ui'], /-RecoverSkillUpdate is a standalone operation and cannot be combined with -Skills/],
         [['-RecoverSkillUpdate', '-UpdateSkills'], /cannot be combined with -UpdateSkills/],
         [['-RecoverSkillUpdate', '-DryRun'], /-DryRun requires -UpdateSkills/],
-        [['-UpdateSkills', '-Skills', 'nope'], /Not Agent Kit skills: nope/],
+        [['-UpdateSkills', '-Skills', 'nope'], /Unknown core skill: nope/],
+        [['-UpdateSkills', '-Skills', 'web-design-guidelines'], /Unknown core skill: web-design-guidelines \(optional modules are selected with -OptionalSkills\)/],
+        [['-UpdateSkills', '-OptionalSkills', 'debugging'], /Unknown optional skill: debugging \(core skills are selected with -Skills\)/],
+        [['-UpdateSkills', '-OptionalSkills', 'vercel-react-best-practices'], /vercel-react-best-practices is a referenced optional module; Agent Kit does not install or update it/],
+        [['-UpdateSkills', '-Skills', '..'], /Invalid skill name: \.\./],
         [['-RecoverSkillUpdate'], /No \.agent-kit-update\.lock: there is no interrupted update to recover/],
       ]) await failsWith(run(main, ...args), pattern, args.join(' '));
       assert.equal(snapshot(main), before);
@@ -155,6 +159,38 @@ export async function testSkillUpdateCli({ shell, failsWith }) {
       await failsWith(run(project, '-UpdateSkills'), /BLOCKED \.agents\/\.agent-kit-update exists: leftovers of an earlier skill update/, 'unknown staging');
       await failsWith(run(project, '-RecoverSkillUpdate'), /No \.agent-kit-update\.lock/, 'recover without a lock');
       assert.equal(snapshot(project), before);
+    });
+    const validateInstall = (project) => execFileAsync(process.execPath, [path.join(kit, 'scripts', 'validation', 'validate-install.mjs'), project]);
+    await check('cli: an ordinary install is refused while an update is interrupted, and validate-install reports it', async () => {
+      const project = await setUp('install-blocked');
+      crash(project, 1);
+      const before = snapshot(project);
+      await failsWith(run(project, '-Tools', 'codex', '-Skills', 'handoff'), /An Agent Kit skill update is running or was interrupted \(\.agent-kit-update\.lock exists\)\. Run install\.ps1 -ProjectRoot <project> -RecoverSkillUpdate first; nothing was changed/, 'install during an interrupted update');
+      await failsWith(validateInstall(project), /an Agent Kit skill update is running or was interrupted \(\.agent-kit-update\.lock, \.agents\/\.agent-kit-update, \.cline\/\.agent-kit-update\); run install\.ps1 -RecoverSkillUpdate/, 'validate-install with leftovers');
+      assert.equal(snapshot(project), before);
+      await run(project, '-RecoverSkillUpdate');
+      await validateInstall(project);
+      await run(project, '-Tools', 'codex', '-Skills', 'handoff');
+      assert.ok(fs.existsSync(path.join(project, '.agents', 'skills', 'handoff', 'SKILL.md')));
+    });
+    await check('validate-install: CRLF and LF copies of a mirrored skill are equal; real differences still fail', async () => {
+      const project = path.join(workspace, 'crlf mirror');
+      fs.mkdirSync(project);
+      await run(project, '-Tools', 'codex,cline', '-Skills', 'safe-change');
+      const mirror = path.join(project, '.cline', 'skills', 'safe-change', 'SKILL.md');
+      fs.writeFileSync(mirror, read(mirror).replace(/\r?\n/g, '\r\n'));
+      await validateInstall(project);
+      fs.appendFileSync(mirror, 'drift\r\n');
+      await failsWith(validateInstall(project), /safe-change\/SKILL\.md: shared\/Cline mirrors differ/, 'real mirror difference');
+    });
+    await check('cli: a project without installed Agent Kit skills is told so', async () => {
+      const project = path.join(workspace, 'no skills');
+      fs.mkdirSync(project);
+      assert.match((await run(project, '-UpdateSkills')).stdout, /No Agent Kit skills are installed in \.agents\/skills or \.cline\/skills; nothing was changed/);
+      const { stdout } = await run(project, '-UpdateSkills', '-Skills', 'handoff');
+      assert.match(stdout, /No selected Agent Kit skills are installed/);
+      assert.match(stdout, /Not installed, so not added: handoff/);
+      assert.deepEqual(fs.readdirSync(project), []);
     });
     await check('cli with the real kit: a fresh install is current and -DryRun writes nothing', async () => {
       const project = path.join(workspace, 'real kit');

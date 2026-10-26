@@ -1,3 +1,4 @@
+import { lstatSync } from 'node:fs';
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -6,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { isAgentKitHook } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'claude-adapter.mjs')).href);
 const { normalizeEol, policyLabel, policyStatus } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'policy-block.mjs')).href);
+const { normalizedHash } = await import(pathToFileURL(path.join(kitRoot, 'scripts', 'install', 'skill-catalog.mjs')).href);
 const project = path.resolve(process.argv[2] ?? '.');
 const agents = path.join(project, '.agents', 'skills');
 const cline = path.join(project, '.cline', 'skills');
@@ -24,6 +26,8 @@ async function filesUnder(directory, prefix = '') {
 }
 try {
   if (!await exists(agents)) throw new Error('missing shared .agents/skills materialization');
+  const leftovers = ['.agent-kit-update.lock', '.agents/.agent-kit-update', '.cline/.agent-kit-update'].filter((rel) => { try { lstatSync(path.join(project, rel)); return true; } catch { return false; } });
+  if (leftovers.length) throw new Error(`an Agent Kit skill update is running or was interrupted (${leftovers.join(', ')}); run install.ps1 -RecoverSkillUpdate`);
   if (await exists(cline)) {
     for (const entry of await readdir(cline, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -32,10 +36,11 @@ try {
       const agentFiles = await filesUnder(agentRoot);
       const clineFiles = await filesUnder(clineRoot);
       if (agentFiles.join('\n') !== clineFiles.join('\n')) throw new Error(`${entry.name}: shared/Cline file sets differ`);
+      // Same identity as the skill catalog: content after CRLF -> LF, so autocrlf checkouts do not count as differences.
       for (const relative of agentFiles) {
         const a = await readFile(path.join(agentRoot, relative));
         const c = await readFile(path.join(clineRoot, relative));
-        if (!a.equals(c)) throw new Error(`${entry.name}/${relative}: shared/Cline mirrors differ`);
+        if (normalizedHash(a) !== normalizedHash(c)) throw new Error(`${entry.name}/${relative}: shared/Cline mirrors differ`);
       }
       checked++;
     }

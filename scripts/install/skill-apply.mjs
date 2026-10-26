@@ -6,38 +6,51 @@
 // Safety model:
 // - The plan is never trusted: it is rebuilt and must match exactly, and every skill is re-verified against the
 //   catalog immediately before it is replaced. Only skills whose content matches a released version are touched.
-// - One update per project at a time: .agent-kit-update.lock in the project root is created exclusively ('wx') and
-//   records the operation and what it will stage.
+// - One update per project at a time: .agent-kit-update.lock in the project root records the operation and what it
+//   will stage. It is written completely to a private temporary file first and then hard-linked into place, so it is
+//   never observed empty or half written.
 // - New content is staged in <.agents|.cline>/.agent-kit-update/<operation>/new, outside the skills roots, and its
 //   hashes are verified. A journal (written once, never updated) then records the old and new hashes of every skill.
 // - Each skill is swapped with two renames: live -> staging/old, then staging/new -> live. They are not atomic
 //   together; if the second fails, the first is reversed. If that also fails, the old version stays in staging/old,
-//   and the lock and journal are kept for recovery.
+//   and the lock and journal are kept for recovery. Transient Windows errors (EPERM, EBUSY, EACCES) are retried a few
+//   times, but only when the failed rename changed nothing and the expected state still holds.
 // - Ownership of leftovers requires the lock, the staging directory name, and the journal to name the same
-//   operation, plus matching hashes. Nothing is deleted recursively: only files this process created, or trees whose
-//   files exactly match the journal, are removed, and directories only when empty.
+//   operation, plus matching hashes. Journal and lock contents are validated against the catalog; target paths are
+//   always derived from the verified project root, never taken from those files, and every rename stays inside the
+//   project. Nothing is deleted recursively: only files this process created, or trees whose files match the
+//   journal, are removed, and directories only when empty.
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { distributedSkills, loadCatalog, normalizedHash } from './skill-catalog.mjs';
-import { LOCK_NAME, PlanError, STAGING_NAME, formatPlan, planSkillUpdate } from './skill-update.mjs';
+import { distributedSkills, isSafeRelativePath, loadCatalog, normalizedHash } from './skill-catalog.mjs';
+import { LOCATIONS, LOCK_NAME, PlanError, STAGING_NAME, formatPlan, planSkillUpdate } from './skill-update.mjs';
 
 const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export { LOCK_NAME, STAGING_NAME };
 const JOURNAL = 'journal.json';
 const FORMAT = 1;
 const OPERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DIGEST = /^[0-9a-f]{64}$/;
 const RECOVER = 'install.ps1 -ProjectRoot <project> -RecoverSkillUpdate (or: node scripts/install/skill-apply.mjs recover --project <project>)';
+// Bounded retries for errors Windows reports while another program briefly holds a file or directory open.
+const RETRYABLE = new Set(['EPERM', 'EBUSY', 'EACCES']);
+export const RETRY_DELAYS_MS = [50, 100, 200, 400, 800];
+// File systems without hard links (for example FAT) fall back to exclusive creation of the lock itself.
+const NO_HARD_LINKS = new Set(['ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EPERM', 'EINVAL', 'EXDEV']);
 
 export class UpdateError extends Error {
   constructor(message, details = {}) { super(message); Object.assign(this, details); }
 }
 
 const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const sameFiles = (a, b) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((key) => b[key] === a[key]);
+const posixRelative = (from, to) => path.relative(from, to).split(path.sep).join('/');
 const inside = (root, candidate) => {
   const relative = path.relative(root, candidate);
   return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -45,6 +58,9 @@ const inside = (root, candidate) => {
 function lstatOrNull(fsImpl, file) {
   try { return fsImpl.lstatSync(file); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw error; }
 }
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const validFiles = (files) => isObject(files) && Object.keys(files).length > 0
+  && Object.entries(files).every(([file, digest]) => isSafeRelativePath(file) && typeof digest === 'string' && DIGEST.test(digest));
 
 // Files (normalized hashes) and directories of a tree; links and special files are refused.
 function tree(fsImpl, dir) {
@@ -64,20 +80,32 @@ function tree(fsImpl, dir) {
   return { files, dirs };
 }
 
-// Absent, a real directory whose files are known, or unsafe (link, file, special entry).
+// True when every file is part of `expected` with the same content and every directory leads to an expected file:
+// what remains of an expected tree after some of its files were deleted.
+function partOf(files, dirs, expected) {
+  const parents = new Set(Object.keys(expected).flatMap((file) => file.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'))));
+  return Object.entries(files).every(([file, digest]) => expected[file] === digest) && dirs.every((dir) => parents.has(dir));
+}
+
+// absent; from or to (exact); from-part, to-part, or part (an incomplete remainder of from, of to, or of both);
+// other (unknown content); unsafe (link, file, special entry).
 function classify(fsImpl, dir, from, to) {
   const stat = lstatOrNull(fsImpl, dir);
   if (!stat) return 'absent';
   if (stat.isSymbolicLink() || !stat.isDirectory()) return 'unsafe';
-  let files;
-  try { ({ files } = tree(fsImpl, dir)); } catch { return 'unsafe'; }
-  return sameFiles(files, from) ? 'from' : sameFiles(files, to) ? 'to' : 'other';
+  let found;
+  try { found = tree(fsImpl, dir); } catch { return 'unsafe'; }
+  if (sameFiles(found.files, from)) return 'from';
+  if (sameFiles(found.files, to)) return 'to';
+  const [ofFrom, ofTo] = [partOf(found.files, found.dirs, from), partOf(found.files, found.dirs, to)];
+  return ofFrom && ofTo ? 'part' : ofFrom ? 'from-part' : ofTo ? 'to-part' : 'other';
 }
 
-// Removes a tree only when its files exactly match the expected hashes; directories are removed only when empty.
-function removeVerified(fsImpl, dir, expected) {
+// Removes a tree only when its files match the expected hashes (all of them, or with `partial` a remainder of them);
+// directories are removed only when empty.
+function removeVerified(fsImpl, dir, expected, { partial = false } = {}) {
   const { files, dirs } = tree(fsImpl, dir);
-  if (!sameFiles(files, expected)) throw new UpdateError(`${dir} no longer matches the recorded content; it was left in place.`);
+  if (!(partial ? partOf(files, dirs, expected) : sameFiles(files, expected))) throw new UpdateError(`${dir} no longer matches the recorded content; it was left in place.`, { mismatch: true });
   for (const file of Object.keys(files)) fsImpl.unlinkSync(path.join(dir, ...file.split('/')));
   for (const sub of dirs.reverse()) fsImpl.rmdirSync(path.join(dir, ...sub.split('/')));
   fsImpl.rmdirSync(dir);
@@ -87,32 +115,68 @@ function rmdirIfEmpty(fsImpl, dir) {
   try { fsImpl.rmdirSync(dir); return true; } catch (error) { if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) return false; throw error; }
 }
 
+// A rename target must be a direct child of <project>/<.agents|.cline>/skills, and every component from the project
+// to that skills root must be a real directory: never written through a link, never outside the project.
+function assertSkillTarget(fsImpl, project, parent, target) {
+  const root = path.join(project, parent, 'skills');
+  if (!inside(project, target) || path.dirname(target) !== root) throw new UpdateError(`Refusing to write ${target}: it is not a skill directory of this project.`);
+  for (const component of [path.join(project, parent), root]) {
+    const stat = lstatOrNull(fsImpl, component);
+    if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) throw new UpdateError(`Refusing to write into ${posixRelative(project, component)}: it is missing, a link or junction, or not a directory.`);
+  }
+}
+
+// Renames, retrying transient Windows errors only while the failed attempt changed nothing and `stillValid` holds.
+function renameWithRetry(fsImpl, from, to, delays, stillValid = () => true) {
+  for (let attempt = 0; ; attempt++) {
+    try { fsImpl.renameSync(from, to); return; } catch (error) {
+      if (!RETRYABLE.has(error.code) || attempt >= delays.length) throw error;
+      sleep(delays[attempt]);
+      if (!lstatOrNull(fsImpl, from) || lstatOrNull(fsImpl, to) || !stillValid()) throw error;
+    }
+  }
+}
+
+// null when absent; the lock when complete and well formed; { incomplete: true } otherwise.
 export function readLock(fsImpl, project) {
   const file = path.join(project, LOCK_NAME);
   const stat = lstatOrNull(fsImpl, file);
   if (!stat) return null;
   let lock = null;
-  if (stat.isFile()) try { lock = JSON.parse(fsImpl.readFileSync(file, 'utf8')); } catch { /* not ours */ }
-  if (lock?.format !== FORMAT || !OPERATION.test(lock?.operation ?? '')) return { foreign: true };
+  if (stat.isFile()) try { lock = JSON.parse(fsImpl.readFileSync(file, 'utf8')); } catch { /* incomplete or unrelated */ }
+  if (lock?.format !== FORMAT || !OPERATION.test(lock?.operation ?? '')) return { incomplete: true };
   return lock;
 }
 
-const lockedError = (lock) => new UpdateError(lock.foreign
-  ? `${LOCK_NAME} exists but was not written by an Agent Kit update; it was left untouched. Remove or rename it before updating.`
+const lockedError = (lock) => new UpdateError(lock.incomplete
+  ? `${LOCK_NAME} exists but is not a complete Agent Kit lock. It may belong to an update that is just starting (try again in a moment), be left by a much older interrupted start, or be an unrelated file. It was left untouched; remove it only after confirming that no Agent Kit update is running for this project.`
   : `Another skill update holds ${LOCK_NAME} (operation ${lock.operation}, pid ${lock.pid} on ${lock.host}). Wait for it, or if it was interrupted run: ${RECOVER}`, { locked: true });
 
-// The lock also records what will be staged (skill, location, target hashes), so an interruption before the journal
-// exists can still be cleaned up without guessing.
+// The lock records what will be staged (skill, location, target hashes), so an interruption before the journal exists
+// can still be cleaned up without guessing. It appears under its final name only once completely written.
 function acquireLock(fsImpl, project, operation, entries) {
   const file = path.join(project, LOCK_NAME);
-  let fd;
-  try { fd = fsImpl.openSync(file, 'wx'); } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    throw lockedError(readLock(fsImpl, project) ?? { foreign: true });
+  const temp = path.join(project, `${LOCK_NAME}.${operation}.tmp`);
+  const content = `${JSON.stringify({ format: FORMAT, operation, pid: process.pid, host: os.hostname(), started: new Date().toISOString(), entries })}\n`;
+  const exclusive = (target) => {
+    let fd;
+    try { fd = fsImpl.openSync(target, 'wx'); } catch (error) {
+      if (error.code === 'EEXIST' && target === file) throw lockedError(readLock(fsImpl, project) ?? { incomplete: true });
+      throw error;
+    }
+    try { fsImpl.writeFileSync(fd, content); } catch (error) { fsImpl.closeSync(fd); fsImpl.unlinkSync(target); throw error; }
+    fsImpl.closeSync(fd);
+  };
+  exclusive(temp);
+  try {
+    fsImpl.linkSync(temp, file);
+  } catch (error) {
+    if (error.code === 'EEXIST') throw lockedError(readLock(fsImpl, project) ?? { incomplete: true });
+    if (!NO_HARD_LINKS.has(error.code)) throw error;
+    exclusive(file);
+  } finally {
+    fsImpl.unlinkSync(temp);
   }
-  try { fsImpl.writeFileSync(fd, `${JSON.stringify({ format: FORMAT, operation, pid: process.pid, host: os.hostname(), started: new Date().toISOString(), entries })}\n`); }
-  catch (error) { fsImpl.closeSync(fd); fd = null; fsImpl.unlinkSync(file); throw error; }
-  finally { if (fd !== null) fsImpl.closeSync(fd); }
 }
 
 function releaseLock(fsImpl, project, operation) {
@@ -122,7 +186,7 @@ function releaseLock(fsImpl, project, operation) {
 const signature = (plan) => JSON.stringify([plan.project, plan.version, plan.blockers.length, plan.entries.map((entry) => [entry.skill, entry.location, entry.status, entry.installedReleases ?? null, entry.targetReleases])]);
 const stagingBase = (project, location) => path.join(project, location.split('/')[0], STAGING_NAME);
 
-export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, onStep = () => {} } = {}) {
+export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, onStep = () => {}, retryDelaysMs = RETRY_DELAYS_MS } = {}) {
   if (!plan || typeof plan !== 'object' || typeof plan.project !== 'string' || !Array.isArray(plan.entries) || !Array.isArray(plan.blockers)) throw new UpdateError('Not a skill update plan.');
   // A running or interrupted update is reported as such, before any replanning.
   const held = readLock(fsImpl, plan.project);
@@ -144,7 +208,7 @@ export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, o
     let sourceFiles;
     try { sourceFiles = tree(fsImpl, source).files; } catch (error) { throw new UpdateError(`Kit source for ${entry.skill}: ${error.message}`); }
     if (!sameFiles(sourceFiles, to)) throw new UpdateError(`The kit source for ${entry.skill} differs from the catalog entry for ${fresh.version}; nothing was changed.`);
-    return { ...entry, from, to, source, live: path.join(project, ...entry.location.split('/'), entry.skill) };
+    return { ...entry, from, to, source, parent: entry.location.split('/')[0], live: path.join(project, ...entry.location.split('/'), entry.skill) };
   });
 
   const operation = randomUUID();
@@ -154,8 +218,8 @@ export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, o
     const base = stagingBase(project, location);
     const stat = lstatOrNull(fsImpl, base);
     let problem = null;
-    if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) problem = `${path.relative(project, base)} exists but is not a staging directory; it was left untouched.`;
-    else if (stat && fsImpl.readdirSync(base).length) problem = `${path.relative(project, base)} contains leftovers of an earlier update that ${LOCK_NAME} does not cover; review them manually.`;
+    if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) problem = `${posixRelative(project, base)} exists but is not a staging directory; it was left untouched.`;
+    else if (stat && fsImpl.readdirSync(base).length) problem = `${posixRelative(project, base)} contains leftovers of an earlier update that ${LOCK_NAME} does not cover; review them manually.`;
     if (problem) { releaseLock(fsImpl, project, operation); throw new UpdateError(problem); }
   }
   const createdFiles = [];
@@ -172,8 +236,17 @@ export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, o
       try { fsImpl.writeFileSync(fd, fsImpl.readFileSync(source)); } finally { fsImpl.closeSync(fd); }
     }
   };
+  // The previous copy normally matches the journal exactly; if it changed during the update it is kept, because it
+  // may hold someone's edits, and the lock and journal stay so that recovery can finish once it is moved away.
+  const removeOld = (item) => {
+    try { removeVerified(fsImpl, item.old, item.from); } catch (error) {
+      if (!error.mismatch) throw error;
+      throw new UpdateError(`${item.skill} in ${item.location} was updated, but its previous copy changed during the update and may contain edits. It was kept at ${posixRelative(project, item.old)}. Move that directory out of the project's staging area, then run: ${RECOVER}`, { recoveryRequired: true, operation, updated: updatedSoFar() });
+    }
+  };
   const stages = new Map();
   const done = [];
+  const updatedSoFar = () => done.map(({ old, item, ...entry }) => entry);
   try {
     for (const location of [...new Set(work.map((item) => item.location))].sort(byCodeUnit)) {
       const base = stagingBase(project, location);
@@ -201,49 +274,70 @@ export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, o
 
     for (const item of work) {
       onStep('before-swap', item);
-      if (classify(fsImpl, item.live, item.from, item.to) !== 'from') throw new UpdateError(`${item.skill} in ${item.location} changed after planning; it was not replaced.`);
-      fsImpl.renameSync(item.live, item.old);
-      try { fsImpl.renameSync(item.staged, item.live); } catch (error) {
-        try { fsImpl.renameSync(item.old, item.live); } catch (rollbackError) {
-          throw new UpdateError(`Could not finish or undo the update of ${item.skill} in ${item.location} (${error.code ?? error.message}; restore failed: ${rollbackError.code ?? rollbackError.message}). The previous version is kept at ${path.relative(project, item.old).split(path.sep).join('/')}. Close programs using the skill, then run: ${RECOVER}`, { recoveryRequired: true, operation, updated: done });
+      assertSkillTarget(fsImpl, project, item.parent, item.live);
+      const liveUnchanged = () => classify(fsImpl, item.live, item.from, item.to) === 'from';
+      if (!liveUnchanged()) throw new UpdateError(`${item.skill} in ${item.location} changed after planning; it was not replaced.`);
+      try { renameWithRetry(fsImpl, item.live, item.old, retryDelaysMs, () => liveUnchanged()); } catch (error) {
+        // A rename can report an error after it took effect; then the previous version is already in staging/old.
+        if (!lstatOrNull(fsImpl, item.live) && lstatOrNull(fsImpl, item.old)) {
+          throw new UpdateError(`Moving ${item.skill} in ${item.location} reported ${error.code ?? error.message} but took effect. The previous version is kept at ${posixRelative(project, item.old)}. Run: ${RECOVER}`, { recoveryRequired: true, operation, updated: updatedSoFar() });
         }
         throw error;
       }
-      done.push({ skill: item.skill, location: item.location, from: item.installedReleases, to: item.targetReleases, old: item.old });
-      if (classify(fsImpl, item.live, item.from, item.to) !== 'to') throw new UpdateError(`${item.skill} in ${item.location} does not match the catalog after replacement. Run: ${RECOVER}`, { recoveryRequired: true, operation, updated: done });
+      try {
+        renameWithRetry(fsImpl, item.staged, item.live, retryDelaysMs, () => classify(fsImpl, item.staged, item.from, item.to) === 'to');
+      } catch (error) {
+        try { renameWithRetry(fsImpl, item.old, item.live, retryDelaysMs); } catch (rollbackError) {
+          throw new UpdateError(`Could not finish or undo the update of ${item.skill} in ${item.location} (${error.code ?? error.message}; restore failed: ${rollbackError.code ?? rollbackError.message}). The previous version is kept at ${posixRelative(project, item.old)}. Close programs using the skill, then run: ${RECOVER}`, { recoveryRequired: true, operation, updated: updatedSoFar() });
+        }
+        throw error;
+      }
+      done.push({ skill: item.skill, location: item.location, from: item.installedReleases, to: item.targetReleases, old: item.old, item });
+      if (classify(fsImpl, item.live, item.from, item.to) !== 'to') throw new UpdateError(`${item.skill} in ${item.location} does not match the catalog after replacement. Run: ${RECOVER}`, { recoveryRequired: true, operation, updated: updatedSoFar() });
     }
   } catch (error) {
     if (error.recoveryRequired) throw error;
     // Completed swaps stay; their old copies and everything this run created are removed.
-    for (const item of done) removeVerified(fsImpl, item.old, work.find((entry) => entry.skill === item.skill && entry.location === item.location).from);
-    for (const file of createdFiles.reverse()) if (lstatOrNull(fsImpl, file)) fsImpl.unlinkSync(file);
-    for (const dir of createdDirs.reverse()) rmdirIfEmpty(fsImpl, dir);
-    releaseLock(fsImpl, project, operation);
-    if (error instanceof UpdateError) { error.updated = done; throw error; }
-    throw new UpdateError(`Skill update stopped (${error.code ?? error.message}); ${done.length ? `already updated: ${done.map((item) => `${item.skill} in ${item.location}`).join(', ')}; ` : ''}nothing else was changed.`, { cause: error, updated: done });
+    try {
+      for (const entry of done) removeOld(entry.item);
+      for (const file of createdFiles.reverse()) if (lstatOrNull(fsImpl, file)) fsImpl.unlinkSync(file);
+      for (const dir of createdDirs.reverse()) rmdirIfEmpty(fsImpl, dir);
+      releaseLock(fsImpl, project, operation);
+    } catch (cleanupError) {
+      if (cleanupError.recoveryRequired) throw cleanupError;
+      throw new UpdateError(`Skill update stopped (${error.code ?? error.message}) and its cleanup also failed (${cleanupError.code ?? cleanupError.message}). Run: ${RECOVER}`, { recoveryRequired: true, operation, cause: error });
+    }
+    const updated = updatedSoFar();
+    if (error instanceof UpdateError) { error.updated = updated; throw error; }
+    throw new UpdateError(`Skill update stopped (${error.code ?? error.message}); ${updated.length ? `already updated: ${updated.map((entry) => `${entry.skill} in ${entry.location}`).join(', ')}; ` : ''}nothing else was changed.`, { cause: error, updated });
   }
 
-  for (const item of done) removeVerified(fsImpl, item.old, work.find((entry) => entry.skill === item.skill && entry.location === item.location).from);
+  for (const entry of done) removeOld(entry.item);
   for (const [location, stage] of stages) {
     fsImpl.unlinkSync(path.join(stage, JOURNAL));
     for (const dir of [path.join(stage, 'new'), path.join(stage, 'old'), stage, stagingBase(project, location)]) rmdirIfEmpty(fsImpl, dir);
   }
   releaseLock(fsImpl, project, operation);
-  return { operation, updated: done.map(({ old, ...item }) => item) };
+  return { operation, updated: updatedSoFar() };
 }
 
-// A stage without a journal was interrupted while staging. No rename happens before the journal exists, so installed
-// skills are untouched. Lists what to remove, provided that staging/old is empty and every staged file is declared by
-// the lock and is a byte prefix of the kit source whose hash the lock recorded; otherwise refuses.
-function stagingLeftovers(fsImpl, project, stage, location, lock, sources) {
-  const fail = (why) => { throw new UpdateError(`Cannot clean up operation ${lock.operation} in ${location.split('/')[0]}: ${why}. Nothing was changed; review ${path.relative(project, stage).split(path.sep).join('/')} and ${LOCK_NAME} manually.`); };
+// The JSON text a journal starts with; a crash while writing it leaves a prefix of this text (or a longer one).
+const journalHeader = (operation, project, location) => JSON.stringify({ format: FORMAT, operation, project, location }, null, 2).slice(0, -2);
+
+// A stage without a usable journal was interrupted while staging. No rename happens before every journal is complete,
+// so installed skills are untouched. Lists what to remove, provided that staging/old is empty and every staged file is
+// declared by the lock and is a byte prefix of the kit source whose hash the lock recorded; otherwise refuses. A
+// truncated journal is removable only when it is a prefix of (or starts with) this operation's journal header.
+function stagingLeftovers(fsImpl, project, stage, location, lock, sources, truncatedJournal) {
+  const fail = (why) => { throw new UpdateError(`Cannot clean up operation ${lock.operation} in ${location.split('/')[0]}: ${why}. Nothing was changed; review ${posixRelative(project, stage)} and ${LOCK_NAME} manually.`); };
   if (!Array.isArray(lock.entries)) fail('its lock does not record what was being staged');
-  const intended = new Map(lock.entries.filter((entry) => entry?.location === location).map((entry) => [entry.skill, entry.to]));
+  const intended = new Map(lock.entries.filter((entry) => entry.location === location).map((entry) => [entry.skill, entry.to]));
   const files = [];
   const dirs = [];
   for (const name of fsImpl.readdirSync(stage).sort(byCodeUnit)) {
     const dir = path.join(stage, name);
     const stat = fsImpl.lstatSync(dir);
+    if (name === JOURNAL && truncatedJournal && stat.isFile() && !stat.isSymbolicLink()) { files.push(dir); continue; }
     if (!['new', 'old'].includes(name) || stat.isSymbolicLink() || !stat.isDirectory()) fail(`unexpected entry ${name}`);
     if (name === 'old') {
       if (fsImpl.readdirSync(dir).length) fail('staging/old is not empty');
@@ -252,7 +346,7 @@ function stagingLeftovers(fsImpl, project, stage, location, lock, sources) {
     }
     for (const skill of fsImpl.readdirSync(dir).sort(byCodeUnit)) {
       const to = intended.get(skill);
-      if (!to || typeof to !== 'object' || !sources.has(skill)) fail(`${skill} was not being staged`);
+      if (!to || !sources.has(skill)) fail(`${skill} was not being staged`);
       const skillDir = path.join(dir, skill);
       const skillStat = fsImpl.lstatSync(skillDir);
       if (skillStat.isSymbolicLink() || !skillStat.isDirectory()) fail(`new/${skill} is not a directory`);
@@ -276,82 +370,117 @@ function stagingLeftovers(fsImpl, project, stage, location, lock, sources) {
 }
 
 // Resolves an interrupted update: completes a swap that reached its second rename, otherwise restores the previous
-// version, and removes the staging of an update interrupted before its journal. Every entry is classified before
-// anything changes; any ambiguity stops with a diagnostic.
-export function recoverSkillUpdate(projectRoot, { kitRoot: root = kitRoot, fsImpl = fs } = {}) {
+// version, finishes removing copies left half deleted, and removes the staging of an update interrupted before its
+// journals were complete. Every entry is classified before anything changes; any ambiguity stops with a diagnostic.
+export function recoverSkillUpdate(projectRoot, { kitRoot: root = kitRoot, fsImpl = fs, retryDelaysMs = RETRY_DELAYS_MS } = {}) {
   const project = fsImpl.realpathSync(path.resolve(projectRoot));
   const lock = readLock(fsImpl, project);
   if (!lock) throw new UpdateError(`No ${LOCK_NAME}: there is no interrupted update to recover.`);
-  if (lock.foreign) throw new UpdateError(`${LOCK_NAME} was not written by an Agent Kit update; nothing was changed.`);
+  if (lock.incomplete) throw new UpdateError(`${LOCK_NAME} is not a complete Agent Kit lock, so recovery cannot prove what it belongs to; nothing was changed. If no Agent Kit update is running for this project, review it and remove it manually.`);
   const { operation } = lock;
   if (lock.host === os.hostname() && lock.pid !== process.pid) {
     let alive = true;
     try { process.kill(lock.pid, 0); } catch (error) { alive = error.code === 'EPERM'; }
     if (alive) throw new UpdateError(`Process ${lock.pid} that started operation ${operation} is still running; nothing was changed.`);
   }
+  const catalog = loadCatalog(root);
+  const knownSkill = (name) => typeof name === 'string' && SKILL_NAME.test(name) && Object.hasOwn(catalog.skills, name);
+  if (lock.entries !== undefined && !(Array.isArray(lock.entries) && lock.entries.every((entry) => isObject(entry) && knownSkill(entry.skill) && LOCATIONS.includes(entry.location) && validFiles(entry.to)))) {
+    throw new UpdateError(`${LOCK_NAME} records entries that are not valid Agent Kit skills, locations, or hashes; nothing was changed.`);
+  }
+  let sources = null;
   const actions = [];
   const stages = [];
-  let sources = null;
-  for (const parent of ['.agents', '.cline']) {
-    const base = path.join(project, parent, STAGING_NAME);
-    const stat = lstatOrNull(fsImpl, base);
-    if (!stat) continue;
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new UpdateError(`${parent}/${STAGING_NAME} is not a staging directory; nothing was changed.`);
-    const names = fsImpl.readdirSync(base);
-    const unknown = names.filter((name) => name !== operation);
-    if (unknown.length) throw new UpdateError(`${parent}/${STAGING_NAME} contains entries that do not belong to operation ${operation}: ${unknown.join(', ')}. Review them manually; nothing was changed.`);
-    if (!names.length) { stages.push({ base }); continue; }
-    const stage = path.join(base, operation);
-    const stageStat = fsImpl.lstatSync(stage);
-    if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) throw new UpdateError(`${stage} is not a staging directory; nothing was changed.`);
-    const journalFile = path.join(stage, JOURNAL);
-    const journalStat = lstatOrNull(fsImpl, journalFile);
-    if (!journalStat) {
-      stages.push({ base, stage, leftovers: stagingLeftovers(fsImpl, project, stage, `${parent}/skills`, lock, sources ??= distributedSkills(root)) });
-      continue;
+  try {
+    for (const parent of ['.agents', '.cline']) {
+      const location = `${parent}/skills`;
+      const base = path.join(project, parent, STAGING_NAME);
+      const stat = lstatOrNull(fsImpl, base);
+      if (!stat) continue;
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new UpdateError(`${parent}/${STAGING_NAME} is not a staging directory; nothing was changed.`);
+      const names = fsImpl.readdirSync(base);
+      const unknown = names.filter((name) => name !== operation);
+      if (unknown.length) throw new UpdateError(`${parent}/${STAGING_NAME} contains entries that do not belong to operation ${operation}: ${unknown.join(', ')}. Review them manually; nothing was changed.`);
+      if (!names.length) { stages.push({ base }); continue; }
+      const stage = path.join(base, operation);
+      const stageStat = fsImpl.lstatSync(stage);
+      if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) throw new UpdateError(`${posixRelative(project, stage)} is not a staging directory; nothing was changed.`);
+      const journalFile = path.join(stage, JOURNAL);
+      const journalStat = lstatOrNull(fsImpl, journalFile);
+      if (journalStat && (journalStat.isSymbolicLink() || !journalStat.isFile())) throw new UpdateError(`${posixRelative(project, journalFile)} is not a file; nothing was changed.`);
+      let journal = null;
+      if (journalStat) {
+        const text = fsImpl.readFileSync(journalFile, 'utf8');
+        try { journal = JSON.parse(text); } catch {
+          const header = journalHeader(operation, project, location);
+          if (!(text.startsWith(header) || header.startsWith(text))) throw new UpdateError(`${posixRelative(project, journalFile)} is unreadable and not a journal of operation ${operation}; nothing was changed.`);
+        }
+      }
+      if (!journal) {
+        stages.push({ base, stage, leftovers: stagingLeftovers(fsImpl, project, stage, location, lock, sources ??= distributedSkills(root), Boolean(journalStat)) });
+        continue;
+      }
+      // Every field is checked; paths are derived from the verified project root, never from the journal.
+      const entries = Array.isArray(journal.entries) ? journal.entries : [];
+      const valid = isObject(journal) && journal.format === FORMAT && journal.operation === operation && journal.project === project && journal.location === location
+        && entries.length > 0 && entries.every((entry) => isObject(entry) && knownSkill(entry.skill) && validFiles(entry.from) && validFiles(entry.to))
+        && new Set(entries.map((entry) => entry.skill)).size === entries.length;
+      if (!valid) throw new UpdateError(`${posixRelative(project, journalFile)} is not a valid journal of operation ${operation} for ${location}; nothing was changed.`);
+      for (const { skill, from, to } of entries) {
+        const live = path.join(project, parent, 'skills', skill);
+        const old = path.join(stage, 'old', skill);
+        const staged = path.join(stage, 'new', skill);
+        const state = [classify(fsImpl, live, from, to), classify(fsImpl, old, from, to), classify(fsImpl, staged, from, to)].join(',');
+        const label = `${skill} in ${location}`;
+        // live,old,new -> action. A "-part"/"part" copy is what remains of a tree whose removal was interrupted.
+        const decision = {
+          'to,from,absent': 'finish', 'to,from-part,absent': 'finish', 'to,part,absent': 'finish', 'to,absent,absent': 'done',
+          'from,absent,to': 'discard', 'from,absent,to-part': 'discard', 'from,absent,part': 'discard', 'from,absent,absent': 'done',
+          'absent,from,to': 'restore', 'absent,from,absent': 'restore',
+        }[state];
+        if (!decision) {
+          const kept = state.startsWith('to,other') || state.startsWith('to,unsafe')
+            ? ` The previous copy at ${posixRelative(project, old)} differs from the recorded version and may contain edits; move it out of the staging area, then run recovery again.` : ' Resolve it manually.';
+          throw new UpdateError(`Cannot recover ${label} unambiguously (live, staged old, staged new: ${state}). Nothing was changed.${kept}`);
+        }
+        actions.push({ label, parent, decision, live, old, staged, from, to });
+      }
+      stages.push({ base, stage, journalFile });
     }
-    if (!journalStat.isFile()) throw new UpdateError(`${journalFile} is not a file; nothing was changed.`);
-    let journal;
-    try { journal = JSON.parse(fsImpl.readFileSync(journalFile, 'utf8')); } catch { throw new UpdateError(`${journalFile} is unreadable; nothing was changed.`); }
-    if (journal.format !== FORMAT || journal.operation !== operation || journal.project !== project || !Array.isArray(journal.entries)) {
-      throw new UpdateError(`${journalFile} does not belong to operation ${operation} in this project; nothing was changed.`);
-    }
-    for (const { skill, from, to } of journal.entries) {
-      const live = path.join(project, ...journal.location.split('/'), skill);
-      const old = path.join(stage, 'old', skill);
-      const staged = path.join(stage, 'new', skill);
-      const state = [classify(fsImpl, live, from, to), classify(fsImpl, old, from, to), classify(fsImpl, staged, from, to)].join(',');
-      const label = `${skill} in ${journal.location}`;
-      // live,old,new -> action
-      const decision = {
-        'to,from,absent': 'finish', 'to,absent,absent': 'done',
-        'from,absent,to': 'discard', 'from,absent,absent': 'done',
-        'absent,from,to': 'restore', 'absent,from,absent': 'restore',
-      }[state];
-      if (!decision) throw new UpdateError(`Cannot recover ${label} unambiguously (live, staged old, staged new: ${state}). Nothing was changed; resolve it manually.`);
-      actions.push({ label, decision, live, old, staged, from, to });
-    }
-    stages.push({ base, stage, journalFile });
+  } catch (error) {
+    if (error instanceof UpdateError) throw error;
+    throw new UpdateError(`Recovery could not inspect the leftovers (${error.code ?? error.message}); nothing was changed.`, { cause: error });
   }
   const results = [];
-  for (const action of actions) {
-    if (action.decision === 'restore') fsImpl.renameSync(action.old, action.live);
-    if (action.decision === 'finish') removeVerified(fsImpl, action.old, action.from);
-    if (['restore', 'discard'].includes(action.decision) && lstatOrNull(fsImpl, action.staged)) removeVerified(fsImpl, action.staged, action.to);
-    results.push({ skill: action.label, result: action.decision === 'finish' || (action.decision === 'done' && classify(fsImpl, action.live, action.from, action.to) === 'to') ? 'updated' : 'previous version' });
-  }
-  for (const { base, stage, journalFile, leftovers } of stages) {
-    if (leftovers) {
-      for (const file of leftovers.files) fsImpl.unlinkSync(file);
-      for (const dir of [...leftovers.dirs, stage]) if (!rmdirIfEmpty(fsImpl, dir) && lstatOrNull(fsImpl, dir)) throw new UpdateError(`${dir} still contains unexpected files; review it manually. ${LOCK_NAME} was kept.`);
-      results.push({ skill: `staging in ${path.relative(project, base).split(path.sep).join('/')}`, result: 'removed; installed skills were not changed' });
-    } else if (stage) {
-      fsImpl.unlinkSync(journalFile);
-      for (const dir of [path.join(stage, 'new'), path.join(stage, 'old'), stage]) if (!rmdirIfEmpty(fsImpl, dir) && lstatOrNull(fsImpl, dir)) throw new UpdateError(`${dir} still contains unexpected files; review it manually. ${LOCK_NAME} was kept.`);
+  let current = null;
+  try {
+    for (const action of actions) {
+      current = action;
+      if (action.decision === 'restore') {
+        assertSkillTarget(fsImpl, project, action.parent, action.live);
+        renameWithRetry(fsImpl, action.old, action.live, retryDelaysMs, () => classify(fsImpl, action.old, action.from, action.to) === 'from');
+      }
+      if (action.decision === 'finish') removeVerified(fsImpl, action.old, action.from, { partial: true });
+      if (['restore', 'discard'].includes(action.decision) && lstatOrNull(fsImpl, action.staged)) removeVerified(fsImpl, action.staged, action.to, { partial: true });
+      results.push({ skill: action.label, result: action.decision === 'finish' || (action.decision === 'done' && classify(fsImpl, action.live, action.from, action.to) === 'to') ? 'updated' : 'previous version' });
     }
-    rmdirIfEmpty(fsImpl, base);
+    current = null;
+    for (const { base, stage, journalFile, leftovers } of stages) {
+      if (leftovers) {
+        for (const file of leftovers.files) fsImpl.unlinkSync(file);
+        for (const dir of [...leftovers.dirs, stage]) if (!rmdirIfEmpty(fsImpl, dir) && lstatOrNull(fsImpl, dir)) throw new UpdateError(`${dir} still contains unexpected files; review it manually. ${LOCK_NAME} was kept.`);
+        results.push({ skill: `staging in ${posixRelative(project, base)}`, result: 'removed; installed skills were not changed' });
+      } else if (stage) {
+        fsImpl.unlinkSync(journalFile);
+        for (const dir of [path.join(stage, 'new'), path.join(stage, 'old'), stage]) if (!rmdirIfEmpty(fsImpl, dir) && lstatOrNull(fsImpl, dir)) throw new UpdateError(`${dir} still contains unexpected files; review it manually. ${LOCK_NAME} was kept.`);
+      }
+      rmdirIfEmpty(fsImpl, base);
+    }
+    releaseLock(fsImpl, project, operation);
+  } catch (error) {
+    if (error instanceof UpdateError) throw error;
+    throw new UpdateError(`Recovery stopped (${error.code ?? error.message})${current ? ` while handling ${current.label}` : ' while removing staging'}; ${LOCK_NAME} was kept. Resolve the cause (for example close programs using the skill), then run recovery again.`, { cause: error });
   }
-  releaseLock(fsImpl, project, operation);
   return { operation, results };
 }
 
@@ -376,13 +505,17 @@ function main(argv) {
     }
     const { updated } = applySkillUpdate(plan);
     for (const item of updated) console.log(`Updated ${item.skill} in ${item.location}: ${item.from.at(-1)} -> ${item.to.at(-1)}`);
-    if (!updated.length) console.log('All selected Agent Kit skills are current; nothing was changed.');
+    if (!updated.length) {
+      console.log(plan.entries.length
+        ? 'All selected Agent Kit skills are current; nothing was changed.'
+        : `No ${plan.selected ? 'selected ' : ''}Agent Kit skills are installed in .agents/skills or .cline/skills; nothing was changed.`);
+    }
     for (const name of plan.notInstalled) console.log(`Not installed, so not added: ${name}`);
     for (const note of plan.notes) console.log(`Note: ${note}`);
     return 0;
   } catch (error) {
-    if (error instanceof UpdateError || error instanceof PlanError) { console.error(`Skill update refused: ${error.message}`); return 1; }
-    throw error;
+    console.error(error instanceof UpdateError || error instanceof PlanError ? `Skill update refused: ${error.message}` : `Skill update failed: ${error.code ?? ''} ${error.message}`.trim());
+    return 1;
   }
 }
 

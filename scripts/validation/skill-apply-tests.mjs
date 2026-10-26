@@ -1,6 +1,6 @@
 // Skill update executor and recovery checks. Run from validate-installer.mjs before PowerShell is required.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -44,7 +44,7 @@ export async function testSkillApply() {
   };
   const refuses = (fn, pattern) => assert.throws(fn, (error) => error instanceof UpdateError && pattern.test(error.message), `expected ${pattern}`);
 
-  const ALPHA_V1 = { 'SKILL.md': 'alpha v1\n' };
+  const ALPHA_V1 = { 'SKILL.md': 'alpha v1\n', 'notes/old.md': 'old notes\n' };
   const ALPHA_V2 = { 'SKILL.md': 'alpha v2\n', 'references/a.md': 'reference\n' };
   const BETA_V1 = { 'SKILL.md': 'beta v1\n' };
   const BETA_V2 = { 'SKILL.md': 'beta v2\n' };
@@ -63,26 +63,41 @@ export async function testSkillApply() {
   };
   const kit = makeKit();
   const plan = (project, options = {}) => planSkillUpdate(project, { kitRoot: kit, ...options });
-  const apply = (project, options = {}) => applySkillUpdate(plan(project, options.plan), { kitRoot: kit, ...options });
-  // An fs whose renameSync fails (EPERM, as Windows reports for open handles) on the listed call numbers.
-  const failingRenames = (...calls) => {
-    let count = 0;
-    return { ...fs, renameSync: (...args) => { if (calls.includes(++count)) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${args[0]}'`), { code: 'EPERM' }); return fs.renameSync(...args); } };
-  };
+  // Short retry pauses keep the tests fast; production uses RETRY_DELAYS_MS.
+  const FAST = [1, 1, 1];
+  const apply = (project, options = {}) => applySkillUpdate(plan(project, options.plan), { kitRoot: kit, retryDelaysMs: FAST, ...options });
+  const recover = (project, options = {}) => recoverSkillUpdate(project, { kitRoot: kit, retryDelaysMs: FAST, ...options });
+  // An fs whose renameSync persistently fails (EPERM, as Windows reports for open handles) for matching renames.
+  const failingRenames = (rule, code = 'EPERM') => ({ ...fs, renameSync: (from, to) => { if (rule(from, to)) throw Object.assign(new Error(`${code}: operation not permitted, rename '${from}'`), { code }); return fs.renameSync(from, to); } });
+  const LIVE = (from) => from.includes(`${path.sep}skills${path.sep}`); // live -> staging/old
+  const STAGED = (from) => from.includes(`${path.sep}new${path.sep}`); // staging/new -> live
+  const ROLLBACK = (from) => from.includes(`${path.sep}old${path.sep}`); // staging/old -> live
   // Runs an update in a child process that exits abruptly after the given fs call, like a crash or power loss.
-  const crash = (project, mode, after, kitRoot = kit) => {
-    const script = `
+  // Modes: 'rename' (after N renames), 'open' (after opening the Nth staged file), 'unlink-old' (after deleting N
+  // files of the previous copy), 'journal' (in the middle of writing the first journal).
+  const crashScript = (mode, after, body) => `
       import fs from 'node:fs';
       import { planSkillUpdate } from ${JSON.stringify(pathToFileURL(path.join(installDir, 'skill-update.mjs')).href)};
-      import { applySkillUpdate } from ${JSON.stringify(pathToFileURL(path.join(installDir, 'skill-apply.mjs')).href)};
-      let renames = 0, opens = 0;
+      import { applySkillUpdate, recoverSkillUpdate } from ${JSON.stringify(pathToFileURL(path.join(installDir, 'skill-apply.mjs')).href)};
+      const mode = ${JSON.stringify(mode)};
+      let renames = 0, opens = 0, unlinks = 0;
       const fsImpl = { ...fs,
-        renameSync: (...args) => { fs.renameSync(...args); if (${JSON.stringify(mode)} === 'rename' && ++renames === ${after}) process.exit(9); },
-        openSync: (...args) => { const fd = fs.openSync(...args); if (${JSON.stringify(mode)} === 'open' && String(args[0]).includes(${JSON.stringify(`${path.sep}new${path.sep}`)}) && ++opens === ${after}) process.exit(9); return fd; } };
-      const kitRoot = ${JSON.stringify(kitRoot)};
-      applySkillUpdate(planSkillUpdate(${JSON.stringify(project)}, { kitRoot }), { kitRoot, fsImpl });`;
+        renameSync: (...args) => { fs.renameSync(...args); if (mode === 'rename' && ++renames === ${after}) process.exit(9); },
+        openSync: (...args) => { const fd = fs.openSync(...args); if (mode === 'open' && String(args[0]).includes(${JSON.stringify(`${path.sep}new${path.sep}`)}) && ++opens === ${after}) process.exit(9); return fd; },
+        unlinkSync: (file) => { fs.unlinkSync(file); for (const [m, part] of [['unlink-old', 'old'], ['unlink-new', 'new']]) if (mode === m && String(file).includes(${JSON.stringify(path.sep)} + part + ${JSON.stringify(path.sep)}) && ++unlinks === ${after}) process.exit(9); },
+        writeFileSync: (target, data, ...rest) => { if (mode === 'journal' && typeof target === 'number' && String(data).includes('"location"') && !String(data).includes('"pid"')) { fs.writeFileSync(target, String(data).slice(0, ${after})); process.exit(9); } return fs.writeFileSync(target, data, ...rest); } };
+      ${body}`;
+  const crash = (project, mode, after, kitRoot = kit) => {
+    const script = crashScript(mode, after, `const kitRoot = ${JSON.stringify(kitRoot)};
+      applySkillUpdate(planSkillUpdate(${JSON.stringify(project)}, { kitRoot }), { kitRoot, fsImpl });`);
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
     assert.equal(result.status, 9, `child did not crash as planned: ${result.stderr}`);
+  };
+  // Runs recovery in a child process that crashes the same way.
+  const crashRecovery = (project, mode, after) => {
+    const script = crashScript(mode, after, `recoverSkillUpdate(${JSON.stringify(project)}, { kitRoot: ${JSON.stringify(kit)}, fsImpl });`);
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.equal(result.status, 9, `recovery did not crash as planned: ${result.stderr}`);
   };
   const stagingOf = (project, parent = '.agents') => {
     const base = path.join(project, parent, STAGING_NAME);
@@ -150,7 +165,7 @@ export async function testSkillApply() {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
       refuses(() => apply(project, { onStep: (step) => { if (step === 'before-swap') write(project, '.agents/skills/alpha/SKILL.md', 'late edit\n'); } }), /changed after planning; it was not replaced/);
-      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), { 'SKILL.md': 'late edit\n' });
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), { ...ALPHA_V1, 'SKILL.md': 'late edit\n' });
       noLeftovers(project);
     });
     check('apply: a changed kit source or catalog is refused with nothing changed', () => {
@@ -190,7 +205,7 @@ export async function testSkillApply() {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
       const before = contents(path.join(project, '.agents/skills'));
-      refuses(() => apply(project, { fsImpl: failingRenames(1) }), /stopped \(EPERM\)/);
+      refuses(() => apply(project, { fsImpl: failingRenames(LIVE) }), /stopped \(EPERM\)/);
       assert.deepEqual(contents(path.join(project, '.agents/skills')), before);
       noLeftovers(project);
     });
@@ -198,7 +213,7 @@ export async function testSkillApply() {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
       writeSkill(project, '.agents/skills', 'beta', BETA_V1);
-      assert.throws(() => apply(project, { fsImpl: failingRenames(2) }), (error) => error instanceof UpdateError && /stopped \(EPERM\)/.test(error.message) && !error.recoveryRequired);
+      assert.throws(() => apply(project, { fsImpl: failingRenames(STAGED) }), (error) => error instanceof UpdateError && /stopped \(EPERM\)/.test(error.message) && !error.recoveryRequired);
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
       assert.deepEqual(text(path.join(project, '.agents/skills/beta')), BETA_V1);
       noLeftovers(project);
@@ -207,7 +222,7 @@ export async function testSkillApply() {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
       writeSkill(project, '.agents/skills', 'beta', BETA_V1);
-      assert.throws(() => apply(project, { fsImpl: failingRenames(3) }), (error) => /already updated: alpha in \.agents\/skills/.test(error.message) && error.updated.length === 1);
+      assert.throws(() => apply(project, { fsImpl: failingRenames((from) => from.endsWith(`${path.sep}skills${path.sep}beta`)) }), (error) => /already updated: alpha in \.agents\/skills/.test(error.message) && error.updated.length === 1);
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V2);
       assert.deepEqual(text(path.join(project, '.agents/skills/beta')), BETA_V1);
       noLeftovers(project);
@@ -216,7 +231,7 @@ export async function testSkillApply() {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
       let error;
-      try { apply(project, { fsImpl: failingRenames(2, 3) }); } catch (caught) { error = caught; }
+      try { apply(project, { fsImpl: failingRenames((from) => STAGED(from) || ROLLBACK(from)) }); } catch (caught) { error = caught; }
       assert.ok(error?.recoveryRequired, 'recovery must be required');
       assert.match(error.message, /previous version is kept at \.agents\/\.agent-kit-update\/[0-9a-f-]+\/old\/alpha/);
       assert.ok(!fs.existsSync(path.join(project, '.agents/skills/alpha')));
@@ -227,7 +242,7 @@ export async function testSkillApply() {
       assert.equal(JSON.parse(fs.readFileSync(path.join(project, LOCK_NAME), 'utf8')).operation, operation);
       assert.ok(plan(project).blockers.some((blocker) => /a skill update is running or was interrupted/.test(blocker)));
       refuses(() => apply(project), /holds \.agent-kit-update\.lock/);
-      assert.deepEqual(recoverSkillUpdate(project).results, [{ skill: 'alpha in .agents/skills', result: 'previous version' }]);
+      assert.deepEqual(recover(project).results, [{ skill: 'alpha in .agents/skills', result: 'previous version' }]);
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
       noLeftovers(project);
       apply(project);
@@ -238,7 +253,7 @@ export async function testSkillApply() {
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
       crash(project, 'rename', 1);
       assert.ok(!fs.existsSync(path.join(project, '.agents/skills/alpha')));
-      assert.equal(recoverSkillUpdate(project).results[0].result, 'previous version');
+      assert.equal(recover(project).results[0].result, 'previous version');
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
       noLeftovers(project);
     });
@@ -248,7 +263,7 @@ export async function testSkillApply() {
       crash(project, 'rename', 2);
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V2);
       assert.ok(fs.existsSync(path.join(project, LOCK_NAME)));
-      assert.equal(recoverSkillUpdate(project).results[0].result, 'updated');
+      assert.equal(recover(project).results[0].result, 'updated');
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V2);
       noLeftovers(project);
     });
@@ -259,7 +274,7 @@ export async function testSkillApply() {
       const { stage } = stagingOf(project);
       write(stage, 'old/alpha/SKILL.md', 'edited after the crash\n');
       const before = contents(project);
-      refuses(() => recoverSkillUpdate(project), /Cannot recover alpha in \.agents\/skills unambiguously \(live, staged old, staged new: absent,other,to\)/);
+      refuses(() => recover(project), /Cannot recover alpha in \.agents\/skills unambiguously \(live, staged old, staged new: absent,other,to\)/);
       assert.deepEqual(contents(project), before);
     });
     check('recover: a crash while staging is cleaned up, including a partly written file; skills are untouched', () => {
@@ -272,7 +287,7 @@ export async function testSkillApply() {
       const partial = fs.readdirSync(path.join(stage, 'new', 'alpha'), { recursive: true }).find((name) => name.endsWith('.md') && fs.statSync(path.join(stage, 'new', 'alpha', name)).size === 0);
       assert.ok(partial, 'the crash leaves an empty staged file');
       write(stage, `new/alpha/${partial.split(path.sep).join('/')}`, ALPHA_V2[partial.split(path.sep).join('/')].slice(0, 3));
-      const { results } = recoverSkillUpdate(project, { kitRoot: kit });
+      const { results } = recover(project);
       assert.deepEqual(results, [{ skill: `staging in .agents/${STAGING_NAME}`, result: 'removed; installed skills were not changed' }]);
       assert.deepEqual(contents(path.join(project, '.agents/skills')), skillsBefore);
       noLeftovers(project);
@@ -292,7 +307,7 @@ export async function testSkillApply() {
         tamper(stagingOf(project).stage, project);
         const before = contents(project);
         try {
-          refuses(() => recoverSkillUpdate(project, { kitRoot: kit }), /Cannot clean up operation [0-9a-f-]+ in \.agents: .*Nothing was changed/);
+          refuses(() => recover(project), /Cannot clean up operation [0-9a-f-]+ in \.agents: .*Nothing was changed/);
           assert.deepEqual(contents(project), before);
         } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
       }
@@ -312,7 +327,7 @@ export async function testSkillApply() {
       crash(project, 'open', 3);
       assert.ok(fs.existsSync(path.join(stagingOf(project, '.agents').stage, 'journal.json')));
       assert.ok(!fs.existsSync(path.join(stagingOf(project, '.cline').stage, 'journal.json')));
-      const { results } = recoverSkillUpdate(project, { kitRoot: kit });
+      const { results } = recover(project);
       assert.deepEqual(results.map((item) => item.result), ['previous version', 'removed; installed skills were not changed']);
       assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
       assert.deepEqual(text(path.join(project, '.cline/skills/alpha')), ALPHA_V1);
@@ -325,9 +340,9 @@ export async function testSkillApply() {
       const unknownBefore = contents(unknown);
       assert.ok(plan(unknown).blockers.some((blocker) => /leftovers of an earlier skill update/.test(blocker)));
       refuses(() => apply(unknown), /conflicts or blockers/);
-      refuses(() => recoverSkillUpdate(unknown), /No \.agent-kit-update\.lock/);
+      refuses(() => recover(unknown), /No \.agent-kit-update\.lock/);
       write(unknown, LOCK_NAME, `${JSON.stringify({ format: 1, operation: '00000000-0000-4000-8000-000000000000', pid: 1, host: 'elsewhere' })}\n`);
-      refuses(() => recoverSkillUpdate(unknown), /do not belong to operation 00000000-0000-4000-8000-000000000000: someone-else/);
+      refuses(() => recover(unknown), /do not belong to operation 00000000-0000-4000-8000-000000000000: someone-else/);
       fs.unlinkSync(path.join(unknown, LOCK_NAME));
       assert.deepEqual(contents(unknown), unknownBefore);
       const foreign = fresh('p');
@@ -335,8 +350,8 @@ export async function testSkillApply() {
       write(foreign, LOCK_NAME, 'my own notes\n');
       write(foreign, `.cline/${STAGING_NAME}`, 'a file with a conflicting name\n');
       const foreignBefore = contents(foreign);
-      refuses(() => apply(foreign), /was not written by an Agent Kit update/);
-      refuses(() => recoverSkillUpdate(foreign), /was not written by an Agent Kit update/);
+      refuses(() => apply(foreign), /not a complete Agent Kit lock/);
+      refuses(() => recover(foreign), /not a complete Agent Kit lock/);
       assert.deepEqual(contents(foreign), foreignBefore);
     });
     check('apply: a concurrent run is refused while the first holds the lock; the first completes', () => {
@@ -377,8 +392,261 @@ export async function testSkillApply() {
       refuses(() => applySkillUpdate(planned, { kitRoot: kit }), /out of date/);
       assert.deepEqual(fs.readdirSync(outside), []);
     });
+    // --- Forged journals and locks (B1): nothing may change anywhere, inside or outside the project. ---
+    const journalOf = (project, parent = '.agents') => path.join(stagingOf(project, parent).stage, 'journal.json');
+    const editJson = (file, mutate) => { const data = JSON.parse(fs.readFileSync(file, 'utf8')); mutate(data); fs.writeFileSync(file, JSON.stringify(data)); };
+    const unchangedEverywhere = (fn) => { const before = contents(workspace); fn(); assert.deepEqual(contents(workspace), before, 'something changed'); };
+    check('recover: a forged journal (location, skill, hashes, structure) is refused and nothing changes anywhere', () => {
+      const victim = fresh('victim');
+      write(victim, 'keep.txt', 'keep\n');
+      const forgeries = {
+        'location outside the project': (j, project) => { j.location = path.relative(project, victim).split(path.sep).join('/'); },
+        'absolute location': (j) => { j.location = victim; },
+        'the other location': (j) => { j.location = '.cline/skills'; },
+        'skill with ..': (j) => { j.entries[0].skill = '../escape'; },
+        'nested skill path': (j) => { j.entries[0].skill = 'alpha/inner'; },
+        'absolute skill': (j) => { j.entries[0].skill = victim; },
+        'unknown skill': (j) => { j.entries[0].skill = 'not-a-kit-skill'; },
+        'from is not an object': (j) => { j.entries[0].from = 'x'; },
+        'malformed digest': (j) => { j.entries[0].to['SKILL.md'] = 'XYZ'; },
+        'unsafe file path': (j) => { j.entries[0].from = { '../x.md': '0'.repeat(64) }; },
+        'duplicate skill': (j) => { j.entries.push(structuredClone(j.entries[0])); },
+        'no entries': (j) => { j.entries = []; },
+        'entries not a list': (j) => { j.entries = { 0: j.entries[0] }; },
+        'another project': (j) => { j.project = victim; },
+        'another format': (j) => { j.format = 2; },
+      };
+      for (const [name, forge] of Object.entries(forgeries)) {
+        const project = fresh('p');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        crash(project, 'rename', 1);
+        editJson(journalOf(project), (j) => forge(j, project));
+        try {
+          unchangedEverywhere(() => refuses(() => recover(project), /is not a valid journal of operation [0-9a-f-]+ for \.agents\/skills; nothing was changed/));
+        } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+      }
+    });
+    check('recover: forged lock entries are refused and nothing changes anywhere', () => {
+      const forgeries = {
+        'location outside': (lock) => { lock.entries[0].location = '../outside/skills'; },
+        'skill ..': (lock) => { lock.entries[0].skill = '..'; },
+        'bad digest': (lock) => { lock.entries[0].to = { 'SKILL.md': 'nope' }; },
+        'entries not a list': (lock) => { lock.entries = {}; },
+      };
+      for (const [name, forge] of Object.entries(forgeries)) {
+        const project = fresh('p');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        crash(project, 'open', 1);
+        editJson(path.join(project, LOCK_NAME), forge);
+        try {
+          unchangedEverywhere(() => refuses(() => recover(project), /records entries that are not valid Agent Kit skills, locations, or hashes; nothing was changed/));
+        } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+      }
+    });
+    check('recover: a skills root replaced by a junction after the crash is never written through', () => {
+      const victim = fresh('victim');
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(project, 'rename', 1);
+      fs.rmdirSync(path.join(project, '.agents', 'skills'));
+      link(victim, path.join(project, '.agents', 'skills'));
+      unchangedEverywhere(() => refuses(() => recover(project), /Refusing to write into \.agents\/skills: it is missing, a link or junction, or not a directory/));
+      assert.deepEqual(fs.readdirSync(victim), []);
+    });
+
+    // --- Interrupted cleanup (M1). ---
+    check('recover: a crash while the previous copy was being deleted is finished', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(project, 'unlink-old', 1);
+      assert.deepEqual(text(path.join(stagingOf(project).stage, 'old', 'alpha')), { 'notes/old.md': ALPHA_V1['notes/old.md'] });
+      assert.deepEqual(recover(project).results, [{ skill: 'alpha in .agents/skills', result: 'updated' }]);
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V2);
+      noLeftovers(project);
+    });
+    check('recover: a crash inside recovery while it removed the staged copy is finished by a second recovery', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(project, 'rename', 1);
+      crashRecovery(project, 'unlink-new', 1);
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      assert.deepEqual(recover(project).results, [{ skill: 'alpha in .agents/skills', result: 'previous version' }]);
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      noLeftovers(project);
+    });
+    check('recover: a partly deleted copy with extra or edited files is refused with guidance', () => {
+      for (const [name, tamper] of [['extra file', (old) => write(old, 'mine.md', 'mine\n')], ['edited file', (old) => write(old, 'notes/old.md', 'edited\n')]]) {
+        const project = fresh('p');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        crash(project, 'unlink-old', 1);
+        tamper(path.join(stagingOf(project).stage, 'old', 'alpha'));
+        const before = contents(project);
+        try {
+          refuses(() => recover(project), /Cannot recover alpha in \.agents\/skills unambiguously \(live, staged old, staged new: to,other,absent\)\. Nothing was changed\. The previous copy at \.agents\/\.agent-kit-update\/[0-9a-f-]+\/old\/alpha differs from the recorded version and may contain edits; move it out of the staging area/);
+          assert.deepEqual(contents(project), before);
+        } catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+      }
+    });
+
+    // --- Edits during the swap (L1), truncated journals (L2), and failing recovery (L3). ---
+    check('apply: an edit made at the last moment is kept and reported; recovery finishes once it is moved away', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      let edited = false;
+      const fsImpl = { ...fs, renameSync: (from, to) => { if (!edited && LIVE(from)) { edited = true; fs.writeFileSync(path.join(from, 'SKILL.md'), 'edit at the worst moment\n'); } return fs.renameSync(from, to); } };
+      let error;
+      try { apply(project, { fsImpl }); } catch (caught) { error = caught; }
+      assert.ok(error?.recoveryRequired);
+      assert.match(error.message, /alpha in \.agents\/skills was updated, but its previous copy changed during the update and may contain edits\. It was kept at \.agents\/\.agent-kit-update\/[0-9a-f-]+\/old\/alpha\. Move that directory out/);
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V2);
+      const rescued = path.join(fresh('rescued'), 'alpha');
+      fs.renameSync(path.join(stagingOf(project).stage, 'old', 'alpha'), rescued);
+      assert.equal(fs.readFileSync(path.join(rescued, 'SKILL.md'), 'utf8'), 'edit at the worst moment\n');
+      assert.deepEqual(recover(project).results, [{ skill: 'alpha in .agents/skills', result: 'updated' }]);
+      noLeftovers(project);
+    });
+    check('recover: a journal cut off by a crash is cleaned up; unrelated journal text is refused', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(project, 'journal', 40);
+      assert.deepEqual(recover(project).results, [{ skill: `staging in .agents/${STAGING_NAME}`, result: 'removed; installed skills were not changed' }]);
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      noLeftovers(project);
+      const other = fresh('p');
+      writeSkill(other, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(other, 'journal', 40);
+      fs.writeFileSync(journalOf(other), 'not a journal');
+      const before = contents(other);
+      refuses(() => recover(other), /journal\.json is unreadable and not a journal of operation/);
+      assert.deepEqual(contents(other), before);
+    });
+    check('recover: a failing rename stops recovery with a clear error; a later recovery succeeds', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      crash(project, 'rename', 1);
+      refuses(() => recover(project, { fsImpl: failingRenames(ROLLBACK) }), /Recovery stopped \(EPERM\) while handling alpha in \.agents\/skills; \.agent-kit-update\.lock was kept/);
+      assert.ok(fs.existsSync(path.join(project, LOCK_NAME)));
+      assert.equal(recover(project).results[0].result, 'previous version');
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      noLeftovers(project);
+    });
+
+    // --- Bounded retries for transient Windows errors (H1). ---
+    const transientRenames = (rule, failures, code) => {
+      const calls = { matched: 0 };
+      return { calls, fsImpl: { ...fs, renameSync: (from, to) => { if (rule(from, to) && ++calls.matched <= failures) throw Object.assign(new Error(`${code}: busy`), { code }); return fs.renameSync(from, to); } } };
+    };
+    check('apply: transient EBUSY, EPERM, and EACCES renames are retried and succeed', () => {
+      for (const [rule, code] of [[LIVE, 'EBUSY'], [STAGED, 'EPERM'], [LIVE, 'EACCES']]) {
+        const project = fresh('p');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        const { calls, fsImpl } = transientRenames(rule, 2, code);
+        assert.equal(apply(project, { fsImpl }).updated.length, 1, code);
+        assert.equal(calls.matched, 3);
+        assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V2);
+        noLeftovers(project);
+      }
+    });
+    check('apply: retries are bounded, and a persistent error still leaves the previous version in place', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      const { calls, fsImpl } = transientRenames(LIVE, Infinity, 'EACCES');
+      refuses(() => apply(project, { fsImpl }), /stopped \(EACCES\)/);
+      assert.equal(calls.matched, 1 + FAST.length);
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      noLeftovers(project);
+    });
+    check('apply: a rename that reports an error after taking effect is not retried and is recoverable', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      let attempts = 0;
+      const fsImpl = { ...fs, renameSync: (from, to) => { fs.renameSync(from, to); if (LIVE(from)) { attempts++; throw Object.assign(new Error('EPERM: reported late'), { code: 'EPERM' }); } } };
+      let error;
+      try { apply(project, { fsImpl }); } catch (caught) { error = caught; }
+      assert.equal(attempts, 1);
+      assert.ok(error?.recoveryRequired);
+      assert.match(error.message, /reported EPERM but took effect\. The previous version is kept at/);
+      assert.equal(recover(project).results[0].result, 'previous version');
+      assert.deepEqual(text(path.join(project, '.agents/skills/alpha')), ALPHA_V1);
+      noLeftovers(project);
+    });
+
+    // --- Lock creation (M2). ---
+    check('lock: it appears only complete, without a leftover temporary file', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      let seen = null;
+      apply(project, { onStep: (step) => { if (step === 'staged') seen = { names: fs.readdirSync(project), lock: JSON.parse(fs.readFileSync(path.join(project, LOCK_NAME), 'utf8')) }; } });
+      assert.deepEqual(seen.names.filter((name) => name.startsWith(LOCK_NAME)), [LOCK_NAME]);
+      assert.deepEqual(seen.lock.entries.map((entry) => entry.skill), ['alpha']);
+      noLeftovers(project);
+      assert.deepEqual(fs.readdirSync(project).filter((name) => name.startsWith(LOCK_NAME)), []);
+    });
+    check('lock: file systems without hard links fall back to exclusive creation', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      const fsImpl = { ...fs, linkSync: () => { throw Object.assign(new Error('ENOTSUP: hard links not supported'), { code: 'ENOTSUP' }); } };
+      assert.equal(apply(project, { fsImpl }).updated.length, 1);
+      noLeftovers(project);
+      assert.deepEqual(fs.readdirSync(project).filter((name) => name.startsWith(LOCK_NAME)), []);
+    });
+    check('lock: an incomplete lock is never described as safe to delete', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      write(project, LOCK_NAME, '');
+      assert.throws(() => apply(project), (error) => /not a complete Agent Kit lock\. It may belong to an update that is just starting/.test(error.message)
+        && /remove it only after confirming that no Agent Kit update is running/.test(error.message) && !/Remove or rename it before updating/.test(error.message));
+      assert.equal(fs.readFileSync(path.join(project, LOCK_NAME), 'utf8'), '');
+    });
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
-  console.log(`Validated ${checks} skill update executor checks (update, no-op, several skills, Cline mirror, edits after planning or staging, changed source or catalog, invalid plans, copy failure, EPERM on either rename, partial completion, rollback, impossible rollback with recovery, crash recovery before, between, and after the renames, unknown or foreign leftovers, concurrent runs, links and junctions).`);
+
+  // Real processes racing for the same project: exactly one updates, the others are refused truthfully.
+  const raceWorkspace = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'agent-kit-skill-race-')));
+  try {
+    const raceKit = path.join(raceWorkspace, 'kit');
+    fs.mkdirSync(path.join(raceKit, 'core', 'skills'), { recursive: true });
+    for (const [name, files] of [['alpha', ALPHA_V2], ['beta', BETA_V2]]) for (const [file, content] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(raceKit, 'core', 'skills', name, file)), { recursive: true }); fs.writeFileSync(path.join(raceKit, 'core', 'skills', name, file), content); }
+    fs.mkdirSync(path.join(raceKit, 'optional'), { recursive: true });
+    fs.writeFileSync(path.join(raceKit, 'optional', 'catalog.json'), '{}\n');
+    fs.writeFileSync(path.join(raceKit, 'VERSION'), '2.0.0\n');
+    fs.mkdirSync(path.join(raceKit, 'scripts', 'install'), { recursive: true });
+    fs.writeFileSync(path.join(raceKit, 'scripts', 'install', 'skill-catalog.json'), catalogFor());
+    const script = `
+      import { planSkillUpdate } from ${JSON.stringify(pathToFileURL(path.join(installDir, 'skill-update.mjs')).href)};
+      import { applySkillUpdate } from ${JSON.stringify(pathToFileURL(path.join(installDir, 'skill-apply.mjs')).href)};
+      const [project, start] = process.argv.slice(-2);
+      const kitRoot = ${JSON.stringify(raceKit)};
+      const plan = planSkillUpdate(project, { kitRoot });
+      while (Date.now() < Number(start)) {}
+      try { console.log('updated ' + applySkillUpdate(plan, { kitRoot }).updated.length); } catch (error) { console.log('refused ' + error.message); }`;
+    for (let round = 0; round < 3; round++) {
+      const project = path.join(raceWorkspace, `race${round}`);
+      for (const [name, files] of [['alpha', ALPHA_V1], ['beta', BETA_V1]]) for (const [file, content] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(project, '.agents', 'skills', name, file)), { recursive: true }); fs.writeFileSync(path.join(project, '.agents', 'skills', name, file), content); }
+      const start = String(Date.now() + 1500);
+      const outputs = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve) => {
+        const proc = spawn(process.execPath, ['--input-type=module', '-e', script, '--', project, start]);
+        let out = '';
+        proc.stdout.on('data', (data) => { out += data; });
+        proc.stderr.on('data', (data) => { out += data; });
+        proc.on('close', () => resolve(out.trim()));
+      })));
+      try {
+        assert.equal(outputs.filter((line) => line === 'updated 2').length, 1, outputs.join(' | '));
+        for (const line of outputs.filter((entry) => entry !== 'updated 2')) {
+          // A process that planned before the winner finished sees the skills changed and replaces nothing.
+          assert.match(line, /^refused (Another skill update holds \.agent-kit-update\.lock|The plan is out of date|(alpha|beta) in \.agents\/skills changed after planning; it was not replaced)/, line);
+          assert.doesNotMatch(line, /not a complete/);
+        }
+        for (const [name, files] of [['alpha', ALPHA_V2], ['beta', BETA_V2]]) for (const [file, content] of Object.entries(files)) assert.equal(fs.readFileSync(path.join(project, '.agents', 'skills', name, file), 'utf8'), content);
+        assert.deepEqual(fs.readdirSync(project).filter((name) => name.startsWith(LOCK_NAME)), []);
+        assert.ok(!fs.existsSync(path.join(project, '.agents', STAGING_NAME)));
+      } catch (error) { error.message = `concurrent processes, round ${round + 1}: ${error.message}`; throw error; }
+    }
+    checks++;
+  } finally {
+    fs.rmSync(raceWorkspace, { recursive: true, force: true });
+  }
+  console.log(`Validated ${checks} skill update executor checks (update, no-op, several skills, Cline mirror, edits after planning, staging, or at the last moment, changed source or catalog, invalid plans, copy failure, EPERM on either rename, bounded retries, partial completion, rollback, impossible rollback, crash recovery at every step including cleanup, truncated journals, forged journals and locks, unknown or incomplete leftovers, concurrent runs in one process and four real processes, links and junctions).`);
 }
