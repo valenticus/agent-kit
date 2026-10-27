@@ -154,12 +154,15 @@ function removeVerified(fsImpl, project, dir, expected, { partial = false } = {}
 }
 
 // A rename whose source and target parent are re-checked for links before every attempt; the target must not exist.
+// The content check (`stillValid`, which reads whole trees) runs first, so the link checks are the last thing before
+// the rename: this narrows, but cannot close, the window in which a concurrent process could swap a component.
 function guardedRename(fsImpl, project, from, to, delays, stillValid = () => true) {
   const check = () => {
+    if (!stillValid()) return false;
     assertRealPath(fsImpl, project, from);
     assertRealPath(fsImpl, project, path.dirname(to));
     if (lstatOrNull(fsImpl, to)) throw new UpdateError(`Refusing to move onto ${posixRelative(project, to)}: it already exists.`, { unsafePath: true });
-    return stillValid();
+    return true;
   };
   if (!check()) throw new UpdateError(`${posixRelative(project, from)} changed before it could be moved; it was not moved.`);
   renameWithRetry(fsImpl, from, to, delays, check);
@@ -263,8 +266,14 @@ export function applySkillUpdate(plan, { kitRoot: root = kitRoot, fsImpl = fs, o
   const held = readLock(fsImpl, plan.project);
   if (held) throw lockedError(held);
   if (plan.canApply !== true) throw new UpdateError('The plan has conflicts or blockers; nothing was changed.');
-  const fresh = planSkillUpdate(plan.project, { kitRoot: root, skills: plan.selected ?? undefined, fsImpl });
-  if (!fresh.canApply || signature(fresh) !== signature(plan)) throw new UpdateError('The plan is out of date: the project, catalog, or installed skills changed since planning. Plan again; nothing was changed.', { stale: true });
+  const stale = () => new UpdateError('The plan is out of date: the project, catalog, or installed skills changed since planning. Plan again; nothing was changed.', { stale: true });
+  let fresh;
+  try { fresh = planSkillUpdate(plan.project, { kitRoot: root, skills: plan.selected ?? undefined, fsImpl }); } catch (error) {
+    // Another update moved a skill while this one was replanning.
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw stale();
+    throw error;
+  }
+  if (!fresh.canApply || signature(fresh) !== signature(plan)) throw stale();
   const updates = fresh.entries.filter((entry) => entry.status === 'update');
   if (updates.length === 0) return { operation: null, updated: [] };
 

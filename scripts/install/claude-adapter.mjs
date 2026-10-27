@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { BootstrapError, assertCanonicalSkills, ensureSkillsLink, inspectSkillsLink } from '../../adapters/claude/claude-bootstrap.mjs';
+import { ProjectPathError, inspectProjectPath } from './project-path.mjs';
 
 const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const BOOTSTRAP_RELATIVE = '.claude/agent-kit/claude-bootstrap.mjs';
@@ -73,9 +74,18 @@ function plan(project) {
   const canonicalBootstrap = fs.readFileSync(path.join(kitRoot, 'adapters', 'claude', 'claude-bootstrap.mjs'));
   const template = fs.readFileSync(path.join(kitRoot, 'adapters', 'claude', 'CLAUDE.template.md'), 'utf8');
   const claudeDir = path.join(project, '.claude');
-  for (const dir of [claudeDir, path.join(claudeDir, 'agent-kit')]) {
-    try { if (!fs.statSync(dir).isDirectory()) refuse(`${dir} exists but is not a directory.`); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
+  // Nothing the adapter reads or writes may lead outside the project: .claude, its files, and the canonical skills
+  // must be real directories and files. CLAUDE.md and .gitignore may be links that stay inside the project.
+  const at = (relative, options) => {
+    try { return inspectProjectPath(project, relative, options); } catch (error) {
+      if (error instanceof ProjectPathError) refuse(error.message);
+      throw error;
+    }
+  };
+  for (const dir of ['.claude', '.claude/agent-kit', '.agents', '.agents/skills']) at(dir, { type: 'dir' });
+  for (const file of [BOOTSTRAP_RELATIVE, '.claude/settings.json']) at(file, { type: 'file' });
+  at('CLAUDE.md', { type: 'file', allowInternalLink: true });
+  const gitignore = at('.gitignore', { type: 'file', allowInternalLink: true });
   const link = inspectSkillsLink(project);
   if (!['missing', 'correct'].includes(link.state)) {
     refuse(`${link.link} already exists (${link.state}) and is not the Agent Kit link to .agents/skills. Resolve it manually; it is never overwritten.`);
@@ -84,7 +94,7 @@ function plan(project) {
     claudeMd: planClaudeMd(readIfPresent(path.join(project, 'CLAUDE.md'), 'utf8'), template),
     bootstrap: planBootstrapFile(readIfPresent(path.join(project, BOOTSTRAP_RELATIVE)), canonicalBootstrap),
     settings: planSettings(readIfPresent(path.join(claudeDir, 'settings.json'), 'utf8')),
-    gitignore: planGitignore(readIfPresent(path.join(project, '.gitignore'), 'utf8')),
+    gitignore: { ...planGitignore(readIfPresent(path.join(project, '.gitignore'), 'utf8')), file: gitignore.real },
     canonicalBootstrap,
   };
 }
@@ -129,7 +139,7 @@ export function install(projectRoot, { fsImpl = fs } = {}) {
   }
   if (steps.claudeMd.action === 'create') { write('CLAUDE.md', steps.claudeMd.content, 'wx'); report.push('created CLAUDE.md'); }
   if (steps.gitignore.action === 'create') { write('.gitignore', steps.gitignore.content, 'wx'); report.push(`created .gitignore with ${GITIGNORE_ENTRY}`); }
-  if (steps.gitignore.action === 'append') { fs.appendFileSync(path.join(project, '.gitignore'), steps.gitignore.content); report.push(`added ${GITIGNORE_ENTRY} to .gitignore`); }
+  if (steps.gitignore.action === 'append') { fs.appendFileSync(steps.gitignore.file, steps.gitignore.content); report.push(`added ${GITIGNORE_ENTRY} to .gitignore`); }
   const linked = ensureSkillsLink(project);
   report.push(`${linked.status} .claude/skills link`);
   return report;

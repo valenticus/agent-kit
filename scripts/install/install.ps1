@@ -11,8 +11,11 @@ param(
   [switch]$RecoverSkillUpdate
 )
 $ErrorActionPreference = 'Stop'
-$kitRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$project = Resolve-Path $ProjectRoot
+# Paths passed to node are always double-quoted: PowerShell on macOS and Linux expands wildcard characters such as
+# [1] in unquoted (even variable) arguments of native commands, which would select a different directory.
+$kitRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')
+# Literal: brackets and other wildcard characters in a project path never select a different directory.
+$project = Resolve-Path -LiteralPath $ProjectRoot
 if ($DryRun -and -not $UpdateSkills) { throw '-DryRun requires -UpdateSkills' }
 if ($UpdateSkills -or $RecoverSkillUpdate) {
   # Standalone update of installed Agent Kit skills, or recovery of an interrupted one. The Node modules plan, verify,
@@ -25,7 +28,7 @@ if ($UpdateSkills -or $RecoverSkillUpdate) {
   }
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "$operation requires Node.js on PATH" }
   if ($RecoverSkillUpdate) {
-    & node (Join-Path $kitRoot 'scripts/install/skill-apply.mjs') recover --project $project.Path
+    & node "$(Join-Path $kitRoot 'scripts/install/skill-apply.mjs')" recover --project "$($project.Path)"
     if ($LASTEXITCODE -ne 0) { throw "-RecoverSkillUpdate stopped (exit $LASTEXITCODE); see the messages above." }
     return
   }
@@ -46,17 +49,17 @@ if ($UpdateSkills -or $RecoverSkillUpdate) {
       $selected += $skill
     }
   }
-  $arguments = @('--project', $project.Path)
+  $arguments = @()
   if ($PSBoundParameters.ContainsKey('Skills') -or $PSBoundParameters.ContainsKey('OptionalSkills')) {
     if ($selected.Count -eq 0) { throw '-Skills or -OptionalSkills was given without skill names' }
     $arguments += @('--skills', ($selected -join ','))
   }
   if ($DryRun) {
-    & node (Join-Path $kitRoot 'scripts/install/skill-update.mjs') plan @arguments
+    & node "$(Join-Path $kitRoot 'scripts/install/skill-update.mjs')" plan --project "$($project.Path)" @arguments
     if ($LASTEXITCODE -ne 0) { throw "-UpdateSkills -DryRun: the plan has conflicts or blockers (exit $LASTEXITCODE); nothing was changed." }
     return
   }
-  & node (Join-Path $kitRoot 'scripts/install/skill-apply.mjs') apply @arguments
+  & node "$(Join-Path $kitRoot 'scripts/install/skill-apply.mjs')" apply --project "$($project.Path)" @arguments
   if ($LASTEXITCODE -ne 0) { throw "-UpdateSkills stopped (exit $LASTEXITCODE); see the messages above for what, if anything, was changed." }
   return
 }
@@ -68,7 +71,7 @@ if ($UpdatePolicies) {
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw '-UpdatePolicies requires Node.js on PATH' }
   $policyBlock = Join-Path $kitRoot 'scripts/install/policy-block.mjs'
   foreach ($command in @('preflight-update','update')) {
-    & node $policyBlock $command --project $project.Path
+    & node "$policyBlock" $command --project "$($project.Path)"
     if ($LASTEXITCODE -ne 0) { throw "Policy $command failed (exit $LASTEXITCODE)" }
   }
   return
@@ -93,7 +96,7 @@ foreach ($tool in $Tools) { if ($tool -notin $allowedTools) { throw "Unknown too
 if ($CopilotAuditor -and 'copilot' -notin $Tools) { throw '-CopilotAuditor requires copilot in -Tools' }
 $claudeAdapter = Join-Path $kitRoot 'scripts/install/claude-adapter.mjs'
 function Invoke-ClaudeAdapter([string]$command) {
-  & node $claudeAdapter $command --project $project.Path
+  & node "$claudeAdapter" $command --project "$($project.Path)"
   if ($LASTEXITCODE -ne 0) { throw "Claude adapter $command failed (exit $LASTEXITCODE)" }
 }
 
@@ -119,8 +122,18 @@ if ('copilot' -in $Tools) {
   }
 }
 # A new project gets the canonical root instructions (with the managed policy blocks). An existing AGENTS.md is never touched here.
+function Test-Link($item) {
+  $item.LinkType -in @('SymbolicLink', 'Junction') -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+}
 $agentsDestination = Join-Path $project 'AGENTS.md'
 if (Test-Path -LiteralPath $agentsDestination -PathType Container) { throw "$agentsDestination is a directory, not a file" }
+# Test-Path reports a broken link as present, so the project would silently get no AGENTS.md: open it to be sure.
+$agentsItem = Get-Item -LiteralPath $agentsDestination -Force -ErrorAction SilentlyContinue
+if ($null -ne $agentsItem -and (Test-Link $agentsItem)) {
+  try { [System.IO.File]::Open($agentsDestination, 'Open', 'Read', 'ReadWrite').Dispose() } catch {
+    throw "$agentsDestination is a broken or circular link; fix or remove it first. Nothing was changed."
+  }
+}
 if (-not (Test-Path -LiteralPath $agentsDestination)) {
   $fileCopies += ,@((Join-Path $kitRoot 'templates\project-rules\AGENTS.md'), $agentsDestination)
 }
@@ -149,23 +162,27 @@ if ('kilo' -in $Tools) {
 if ('claude' -in $Tools -and -not (@($directoryCopies | Where-Object { $_[1].StartsWith((Join-Path $project '.agents\skills\'), [System.StringComparison]::OrdinalIgnoreCase) })) -and -not (Test-Path -LiteralPath (Join-Path $project '.agents\skills') -PathType Container)) {
   throw 'The Claude adapter exposes existing canonical skills, but .agents\skills is missing and no shared skills are selected'
 }
-# Every existing ancestor between the project root and a destination must be able to act as a directory.
-# An ordinary file, or a link whose target is missing or not a directory, fails; a link to a valid directory is allowed.
-function Assert-UsableAncestors([string]$destination) {
+# Every existing component between the project root and a destination, the destination included, must be a real
+# directory (an existing destination is refused below): never a symbolic link, junction, or other reparse point, even
+# one that leads back into the project, so nothing is ever written outside the project through a link.
+function Assert-ProjectPath([string]$destination) {
   $root = $project.Path.TrimEnd('\', '/')
-  $current = Split-Path -Parent $destination
-  while ($current -and $current.Length -gt $root.Length -and $current.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+  $parts = @($destination.Substring($root.Length) -split '[\\/]' | Where-Object { $_ })
+  $current = $root
+  for ($index = 0; $index -lt $parts.Count; $index++) {
+    $current = Join-Path $current $parts[$index]
     $item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
-    if ($null -ne $item -and -not (Test-Path -LiteralPath $current -PathType Container)) {
+    if ($null -eq $item) { return }
+    if (Test-Link $item) { throw "Refusing to install $destination because $current is a symbolic link, junction, or other reparse point; nothing was changed" }
+    if ($index -lt $parts.Count - 1 -and -not $item.PSIsContainer) {
       throw "Refusing to install $destination because $current exists but is not a usable directory"
     }
-    $current = Split-Path -Parent $current
   }
 }
 $planned = @{}
 foreach ($copy in @($directoryCopies) + @($fileCopies)) {
   $destination = $copy[1]
-  Assert-UsableAncestors $destination
+  Assert-ProjectPath $destination
   if (Test-Path -LiteralPath $destination) { throw "Refusing to overwrite $destination" }
   if ($planned.ContainsKey($destination.ToLowerInvariant())) { throw "Refusing to write $destination twice in one invocation" }
   $planned[$destination.ToLowerInvariant()] = $true

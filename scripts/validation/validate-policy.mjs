@@ -198,6 +198,30 @@ try {
       assert.throws(() => update(toDir), /not a regular file/);
       assert.deepEqual(fs.readdirSync(toDir).sort(), ['AGENTS.md', 'd']);
     });
+    check('AGENTS.md links that lead outside the project are refused; nothing changes on either side', () => {
+      const listing = (dir) => fs.readdirSync(dir, { recursive: true }).sort().map((rel) => {
+        const file = path.join(dir, rel);
+        const stat = fs.lstatSync(file);
+        return stat.isSymbolicLink() ? `${rel}|link:${fs.readlinkSync(file)}` : `${rel}|${stat.mtimeMs}|${stat.isFile() ? fs.readFileSync(file, 'utf8') : ''}`;
+      }).join('\n');
+      const space = fs.mkdtempSync(path.join(workspace, 'space-'));
+      fs.mkdirSync(path.join(space, 'outside'));
+      fs.writeFileSync(path.join(space, 'outside', 'plain.md'), '# Not a project file\n');
+      fs.writeFileSync(path.join(space, 'outside', 'agents.md'), `# Shared elsewhere\n\n${START_MARKER}\nold\n${END_MARKER}\n`);
+      for (const [name, setUp] of [
+        ['external file without markers', (dir) => fs.symlinkSync('../outside/plain.md', path.join(dir, 'AGENTS.md'))],
+        ['external file with stale markers', (dir) => fs.symlinkSync(path.join(space, 'outside', 'agents.md'), path.join(dir, 'AGENTS.md'))],
+        ['inside-looking path through a linked directory', (dir) => { fs.symlinkSync('../outside', path.join(dir, 'shared')); fs.symlinkSync('shared/plain.md', path.join(dir, 'AGENTS.md')); }],
+      ]) {
+        const dir = path.join(space, name.replace(/\W+/g, '-'));
+        fs.mkdirSync(dir);
+        setUp(dir);
+        const before = listing(space);
+        assert.throws(() => preflightUpdate(dir), /leads outside the project/, name);
+        assert.throws(() => update(dir), /leads outside the project/, name);
+        assert.equal(listing(space), before, `${name}: nothing changed`);
+      }
+    });
     check('file mode is preserved on replace and append', () => {
       for (const body of ['# Mine\n', `${START_MARKER}\nold\n${END_MARKER}\n`]) {
         const dir = project(body);

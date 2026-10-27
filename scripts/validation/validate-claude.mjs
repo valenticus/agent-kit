@@ -360,13 +360,71 @@ try {
       assert.equal(kitCopy.status, 2, 'kit copy must not act on its own repository without --project');
     });
   }
+  // H. links never lead the adapter outside the project. Each case is a project beside an "outside" directory; a
+  // refusal must leave both byte-for-byte unchanged (contents, modification times, link targets).
+  const snapshot = (dir) => {
+    const out = [];
+    const walk = (current) => {
+      for (const name of fs.readdirSync(current).sort()) {
+        const file = path.join(current, name);
+        const stat = fs.lstatSync(file);
+        if (stat.isSymbolicLink()) out.push(`${path.relative(dir, file)}|link:${fs.readlinkSync(file)}`);
+        else if (stat.isDirectory()) { out.push(`${path.relative(dir, file)}/|${stat.mtimeMs}`); walk(file); }
+        else out.push(`${path.relative(dir, file)}|${stat.mtimeMs}|${fs.readFileSync(file, 'utf8')}`);
+      }
+    };
+    walk(dir);
+    return out.join('\n');
+  };
+  // Directory links are junctions on Windows (no privilege needed), so these cases also run there.
+  const dirLink = (target, at) => fs.symlinkSync(posix ? target : path.resolve(path.dirname(at), target), at, posix ? 'dir' : 'junction');
+  const contained = (name, setUp, pattern) => check(`links: ${name}`, () => {
+    const space = path.join(workspace, `space${counter++}`);
+    const dir = path.join(space, 'proj');
+    fs.mkdirSync(path.join(dir, '.agents', 'skills', 'safe-change'), { recursive: true });
+    write(dir, '.agents/skills/safe-change/SKILL.md', 'skill\n');
+    write(space, 'outside/.claude/settings.json', '{\n  "theme": "dark"\n}\n');
+    write(space, 'outside/notes.txt', 'outside notes\n');
+    write(space, 'outside/CLAUDE.md', 'outside rules\n');
+    setUp(dir);
+    const before = snapshot(space);
+    refuses(() => install(dir), pattern);
+    assert.equal(snapshot(space), before, 'nothing may change inside or outside the project');
+  });
+  contained('external .claude directory', (dir) => dirLink('../outside/.claude', path.join(dir, '.claude')), /\.claude is a symbolic link or junction/);
+  contained('external .claude/agent-kit directory', (dir) => { fs.mkdirSync(path.join(dir, '.claude')); dirLink('../../outside', path.join(dir, '.claude', 'agent-kit')); }, /\.claude\/agent-kit is a symbolic link or junction/);
+  contained('internal .claude directory link (links are never written through)', (dir) => { fs.mkdirSync(path.join(dir, 'config')); dirLink('config', path.join(dir, '.claude')); }, /\.claude is a symbolic link or junction/);
+  contained('external .agents directory', (dir) => { fs.rmSync(path.join(dir, '.agents'), { recursive: true }); fs.cpSync(path.join(dir, '..', 'outside'), path.join(dir, '..', 'outside-agents'), { recursive: true }); fs.mkdirSync(path.join(dir, '..', 'outside-agents', 'skills')); dirLink('../outside-agents', path.join(dir, '.agents')); }, /\.agents is a symbolic link or junction/);
+  if (posix) {
+    contained('external .claude/settings.json', (dir) => { fs.mkdirSync(path.join(dir, '.claude')); fs.symlinkSync('../../outside/.claude/settings.json', path.join(dir, '.claude', 'settings.json')); }, /settings\.json is a symbolic link or junction/);
+    contained('external .gitignore', (dir) => fs.symlinkSync('../outside/notes.txt', path.join(dir, '.gitignore')), /\.gitignore is a link that leads outside the project/);
+    contained('.gitignore reaching outside through a linked directory', (dir) => { dirLink('../outside', path.join(dir, 'shared')); fs.symlinkSync('shared/notes.txt', path.join(dir, '.gitignore')); }, /\.gitignore is a link that leads outside the project/);
+    contained('external CLAUDE.md', (dir) => fs.symlinkSync('../outside/CLAUDE.md', path.join(dir, 'CLAUDE.md')), /CLAUDE\.md is a link that leads outside the project/);
+    contained('broken CLAUDE.md link', (dir) => fs.symlinkSync('missing.md', path.join(dir, 'CLAUDE.md')), /CLAUDE\.md is a broken or circular link/);
+    contained('broken .gitignore link', (dir) => fs.symlinkSync('missing', path.join(dir, '.gitignore')), /\.gitignore is a broken or circular link/);
+    check('links: internal .gitignore and CLAUDE.md links are kept and used; second run is a no-op', () => {
+      const dir = project();
+      write(dir, 'config/gitignore', 'node_modules\n');
+      write(dir, 'config/CLAUDE.md', '@AGENTS.md\n');
+      fs.symlinkSync('config/gitignore', path.join(dir, '.gitignore'));
+      fs.symlinkSync('config/CLAUDE.md', path.join(dir, 'CLAUDE.md'));
+      install(dir);
+      assert.equal(fs.readlinkSync(path.join(dir, '.gitignore')), 'config/gitignore');
+      assert.equal(fs.readlinkSync(path.join(dir, 'CLAUDE.md')), 'config/CLAUDE.md');
+      assert.match(read(dir, 'config/gitignore'), /^node_modules\n# Agent Kit: .*\n\/\.claude\/skills\n$/);
+      const before = snapshot(dir);
+      install(dir);
+      assert.equal(snapshot(dir), before);
+    });
+  } else skipped.push('file symlink containment cases (need symlink privilege on Windows)');
+
   check('inspect reports states without mutating', () => {
     const dir = project();
     assert.equal(inspectSkillsLink(dir).state, 'missing');
     assert.ok(!fs.existsSync(path.join(dir, '.claude')));
   });
 
-  console.log(`Validated ${checks} Claude adapter checks (ownership, bridge, bootstrap, settings merge, gitignore, adapter install).${skipped.length ? ` Not exercised on this host: ${skipped.join('; ')}.` : ''}`);
+  console.log(`Validated ${checks} Claude adapter checks (ownership, bridge, bootstrap, settings merge, gitignore, adapter install, link containment).${skipped.length ? ` Not exercised on this host: ${skipped.join('; ')}.` : ''}`);
 } finally {
   fs.rmSync(workspace, { recursive: true, force: true });
 }

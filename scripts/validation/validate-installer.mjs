@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { testInstallPaths } from './install-path-tests.mjs';
 import { testSkillApply } from './skill-apply-tests.mjs';
 import { testSkillUpdateCli } from './skill-update-cli-tests.mjs';
 import { testSkillCatalogAndPlanner } from './skill-update-tests.mjs';
@@ -98,6 +99,7 @@ function resolveOnPath(name) {
 shell = resolveOnPath(shell) ?? shell;
 console.log(`PowerShell path: ${shell}`);
 await testSkillUpdateCli({ shell, failsWith });
+await testInstallPaths({ shell, failsWith });
 const workspace = await mkdtemp(path.join(tmpdir(), 'agent-kit-copilot-'));
 
 // skills === null selects the explicit -NoSkills switch instead of -Skills.

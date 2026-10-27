@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { ProjectPathError, inspectProjectPath } from './project-path.mjs';
 
 const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const DEFAULT_POLICY = 'git-authorship';
@@ -162,23 +163,17 @@ export function planUpdate(existing, root = kitRoot) {
   return { action: kinds.length === 1 ? kinds[0] : 'update', content, changes };
 }
 
-// Resolves AGENTS.md (following a link to its real target, which is what gets updated) and decodes it strictly.
+// Resolves AGENTS.md and decodes it strictly. A link is followed to its real target, which is what gets updated, only
+// when that target is a regular file inside the project; broken, circular, and outside links are refused.
 function readTarget(project) {
-  const file = path.join(project, 'AGENTS.md');
-  let linkStat;
-  try { linkStat = fs.lstatSync(file); } catch (error) {
-    if (error.code === 'ENOENT') return { file, real: file, text: null, bom: false, mode: undefined };
+  let target;
+  try { target = inspectProjectPath(project, 'AGENTS.md', { type: 'file', allowInternalLink: true }); } catch (error) {
+    if (error instanceof ProjectPathError) throw new PolicyError(error.message);
     throw error;
   }
-  let real = file;
-  if (linkStat.isSymbolicLink()) {
-    try { real = fs.realpathSync(file); } catch (error) {
-      if (error.code === 'ENOENT' || error.code === 'ELOOP') throw new PolicyError(`${file} is a broken or circular link; refusing to modify it.`);
-      throw error;
-    }
-  }
+  const { path: file, real } = target;
+  if (!target.exists) return { file, real, text: null, bom: false, mode: undefined };
   const stat = fs.statSync(real);
-  if (!stat.isFile()) throw new PolicyError(`${real} is not a regular file.`);
   return { file, real, ...decodeStrict(fs.readFileSync(real)), mode: stat.mode & 0o7777 };
 }
 

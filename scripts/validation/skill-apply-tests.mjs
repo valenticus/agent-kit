@@ -122,6 +122,53 @@ export async function testSkillApply() {
       noLeftovers(project);
       assert.equal(plan(project).summary.update, 0);
     });
+    check('apply and recover: link checks of the source and target are the last calls before every rename', () => {
+      // Every fs call in order, with its string arguments.
+      const logging = (calls, base = fs) => Object.fromEntries(Object.keys(base).map((key) => [key, typeof base[key] !== 'function' ? base[key]
+        : (...args) => { calls.push([key, ...args.filter((arg) => typeof arg === 'string')]); return base[key](...args); }]));
+      // The calls right before each rename must be lstat only and cover every component of the source, of the target's
+      // parent, and the target itself: no content read may sit between the link checks and the rename.
+      const checkedBeforeRenames = (calls, project) => {
+        const chain = (target) => { const out = []; for (let current = target; current !== project; current = path.dirname(current)) out.push(current); return out; };
+        const renames = calls.flatMap((call, index) => (call[0] === 'renameSync' ? [index] : []));
+        for (const index of renames) {
+          const [, from, to] = calls[index];
+          let start = index;
+          while (start > 0 && calls[start - 1][0] === 'lstatSync') start--;
+          const checked = new Set(calls.slice(start, index).map((call) => call[1]));
+          for (const component of [...chain(from), ...chain(path.dirname(to)), to]) assert.ok(checked.has(component), `${component} was not checked immediately before renaming ${from}`);
+        }
+        return renames.length;
+      };
+      const project = fresh('order');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      writeSkill(project, '.cline/skills', 'beta', BETA_V1);
+      const calls = [];
+      apply(project, { fsImpl: logging(calls) });
+      assert.equal(checkedBeforeRenames(calls, project), 4);
+      // A swap whose rollback also fails (with retries) leaves a restore for recovery; each attempt is checked the same way.
+      const stuck = fresh('order');
+      writeSkill(stuck, '.agents/skills', 'alpha', ALPHA_V1);
+      calls.length = 0;
+      refuses(() => apply(stuck, { fsImpl: logging(calls, failingRenames((from) => STAGED(from) || ROLLBACK(from))) }), /Could not finish or undo/);
+      assert.ok(checkedBeforeRenames(calls, stuck) > 3, 'retried renames were logged');
+      calls.length = 0;
+      recover(stuck, { fsImpl: logging(calls) });
+      assert.equal(checkedBeforeRenames(calls, stuck), 1);
+      assert.deepEqual(text(path.join(stuck, '.agents/skills/alpha')), ALPHA_V1);
+      noLeftovers(stuck);
+    });
+    check('apply: a skill that disappears while replanning (another update moved it) is an out-of-date plan', () => {
+      const project = fresh('p');
+      writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+      const planned = plan(project);
+      const before = contents(project);
+      const live = path.join(project, '.agents', 'skills', 'alpha');
+      const vanishing = { ...fs, lstatSync: (file, ...rest) => { if (file === live) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${file}'`), { code: 'ENOENT' }); return fs.lstatSync(file, ...rest); } };
+      refuses(() => applySkillUpdate(planned, { kitRoot: kit, fsImpl: vanishing, retryDelaysMs: FAST }), /^The plan is out of date/);
+      assert.deepEqual(contents(project), before);
+      noLeftovers(project);
+    });
     check('apply: a second run is a no-op that writes nothing', () => {
       const project = fresh('p');
       writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
