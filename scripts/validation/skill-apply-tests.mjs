@@ -443,6 +443,26 @@ export async function testSkillApply() {
     const journalOf = (project, parent = '.agents') => path.join(stagingOf(project, parent).stage, 'journal.json');
     const editJson = (file, mutate) => { const data = JSON.parse(fs.readFileSync(file, 'utf8')); mutate(data); fs.writeFileSync(file, JSON.stringify(data)); };
     const unchangedEverywhere = (fn) => { const before = contents(workspace); fn(); assert.deepEqual(contents(workspace), before, 'something changed'); };
+    check('recover: a restore whose rename went elsewhere or did nothing is not reported as done; lock and journal are kept', () => {
+      for (const [name, redirect, oldAfter] of [
+        // As if a concurrent process had swapped .agents/skills for a link in the instant before the rename.
+        ['moved elsewhere', (from, elsewhere) => fs.renameSync(from, path.join(elsewhere, 'alpha')), 'absent'],
+        ['reported success without moving', () => {}, 'present'],
+      ]) {
+        const project = fresh('redirect');
+        writeSkill(project, '.agents/skills', 'alpha', ALPHA_V1);
+        refuses(() => apply(project, { fsImpl: failingRenames((from) => STAGED(from) || ROLLBACK(from)) }), /Could not finish or undo/);
+        const elsewhere = fresh('elsewhere');
+        const journal = fs.readFileSync(journalOf(project), 'utf8');
+        const redirecting = { ...fs, renameSync: (from, to) => (ROLLBACK(from) ? redirect(from, elsewhere) : fs.renameSync(from, to)) };
+        refuses(() => recover(project, { fsImpl: redirecting }), new RegExp(`^Restoring alpha in \\.agents/skills did not end as expected: after the move, \\.agents/skills/alpha is absent and \\.agents/\\.agent-kit-update/[0-9a-f-]+/old/alpha is ${oldAfter}\\. .*${LOCK_NAME.replace(/\./g, '\\.')} and the journal were kept`));
+        assert.ok(fs.existsSync(path.join(project, LOCK_NAME)), `${name}: lock kept`);
+        assert.equal(fs.readFileSync(journalOf(project), 'utf8'), journal, `${name}: journal kept`);
+        // Nothing was deleted or repaired: the previous copy is wherever the rename left it, the staged copy remains.
+        assert.deepEqual(text(oldAfter === 'absent' ? path.join(elsewhere, 'alpha') : path.join(stagingOf(project, '.agents').stage, 'old', 'alpha')), ALPHA_V1, name);
+        assert.deepEqual(text(path.join(stagingOf(project, '.agents').stage, 'new', 'alpha')), ALPHA_V2, name);
+      }
+    });
     check('recover: a forged journal (location, skill, hashes, structure) is refused and nothing changes anywhere', () => {
       const victim = fresh('victim');
       write(victim, 'keep.txt', 'keep\n');
@@ -775,8 +795,9 @@ export async function testSkillApply() {
       try {
         assert.equal(outputs.filter((line) => line === 'updated 2').length, 1, outputs.join(' | '));
         for (const line of outputs.filter((entry) => entry !== 'updated 2')) {
-          // A process that planned before the winner finished sees the skills changed and replaces nothing.
-          assert.match(line, /^refused (Another skill update holds \.agent-kit-update\.lock|The plan is out of date|(alpha|beta) in \.agents\/skills changed after planning; it was not replaced)/, line);
+          // A process that planned before the winner finished sees the skills changed and replaces nothing; on a slow
+          // host one may plan only after the winner finished and find nothing left to update.
+          assert.match(line, /^(updated 0$|refused (Another skill update holds \.agent-kit-update\.lock|The plan is out of date|(alpha|beta) in \.agents\/skills changed after planning; it was not replaced))/, line);
           assert.doesNotMatch(line, /not a complete/);
         }
         for (const [name, files] of [['alpha', ALPHA_V2], ['beta', BETA_V2]]) for (const [file, content] of Object.entries(files)) assert.equal(fs.readFileSync(path.join(project, '.agents', 'skills', name, file), 'utf8'), content);

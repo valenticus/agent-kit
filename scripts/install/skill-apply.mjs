@@ -542,6 +542,13 @@ export function recoverSkillUpdate(projectRoot, { kitRoot: root = kitRoot, fsImp
       if (action.decision === 'restore') {
         assertSkillTarget(fsImpl, project, action.parent, action.live);
         guardedRename(fsImpl, project, action.old, action.live, retryDelaysMs, () => classify(fsImpl, action.old, action.from, action.to) === 'from');
+        // A rename that reports success may still have gone elsewhere if a concurrent process swapped a directory for a
+        // link in the instant before it. Never report that as restored, and never try to repair it automatically.
+        assertSkillTarget(fsImpl, project, action.parent, action.live);
+        const [live, old] = [classify(fsImpl, action.live, action.from, action.to), lstatOrNull(fsImpl, action.old) ? 'present' : 'absent'];
+        if (live !== 'from' || old !== 'absent') {
+          throw new UpdateError(`Restoring ${action.label} did not end as expected: after the move, ${posixRelative(project, action.live)} is ${live === 'from' ? 'the previous version' : live} and ${posixRelative(project, action.old)} is ${old}. Another process may have changed the project during recovery, so the copy may have been moved elsewhere. Nothing more was changed; ${LOCK_NAME} and the journal were kept. Stop other processes that change the project, find the previous copy of ${action.label.split(' ')[0]}, put it back manually, then run: ${RECOVER}`);
+        }
       }
       if (action.decision === 'finish') removeVerified(fsImpl, project, action.old, action.from, { partial: true });
       if (['restore', 'discard'].includes(action.decision) && assertRealPath(fsImpl, project, action.staged, { absentOk: true })) removeVerified(fsImpl, project, action.staged, action.to, { partial: true });

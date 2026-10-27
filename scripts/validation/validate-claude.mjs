@@ -395,6 +395,48 @@ try {
   contained('external .claude/agent-kit directory', (dir) => { fs.mkdirSync(path.join(dir, '.claude')); dirLink('../../outside', path.join(dir, '.claude', 'agent-kit')); }, /\.claude\/agent-kit is a symbolic link or junction/);
   contained('internal .claude directory link (links are never written through)', (dir) => { fs.mkdirSync(path.join(dir, 'config')); dirLink('config', path.join(dir, '.claude')); }, /\.claude is a symbolic link or junction/);
   contained('external .agents directory', (dir) => { fs.rmSync(path.join(dir, '.agents'), { recursive: true }); fs.cpSync(path.join(dir, '..', 'outside'), path.join(dir, '..', 'outside-agents'), { recursive: true }); fs.mkdirSync(path.join(dir, '..', 'outside-agents', 'skills')); dirLink('../outside-agents', path.join(dir, '.agents')); }, /\.agents is a symbolic link or junction/);
+  // A hard link cannot be told apart from an ordinary file, so .gitignore is rewritten through a temp file and rename:
+  // the project gets a new file and the linked file outside keeps its inode, content, and time (NTFS too).
+  check('links: .gitignore hard-linked to an outside file is replaced, never appended in place', () => {
+    const space = path.join(workspace, `space${counter++}`);
+    const dir = path.join(space, 'proj');
+    write(dir, '.agents/skills/safe-change/SKILL.md', 'skill\n');
+    const original = Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from('node_modules\r\n# kept byte: '), 0xff, 0x0d, 0x0a]);
+    write(space, 'outside/shared-ignore', original);
+    if (posix) fs.chmodSync(path.join(space, 'outside', 'shared-ignore'), 0o640);
+    fs.linkSync(path.join(space, 'outside', 'shared-ignore'), path.join(dir, '.gitignore'));
+    const outsideBefore = snapshot(path.join(space, 'outside'));
+    const inode = fs.statSync(path.join(space, 'outside', 'shared-ignore')).ino;
+    assert.ok(install(dir).includes('added /.claude/skills to .gitignore'));
+    assert.equal(snapshot(path.join(space, 'outside')), outsideBefore, 'the outside file is unchanged');
+    assert.equal(fs.statSync(path.join(space, 'outside', 'shared-ignore')).ino, inode);
+    const updated = fs.readFileSync(path.join(dir, '.gitignore'));
+    assert.ok(updated.subarray(0, original.length).equals(original), 'every existing byte is kept');
+    assert.equal(updated.subarray(original.length).toString('utf8'), '# Agent Kit: generated Claude Code skills link (never commit)\r\n/.claude/skills\r\n');
+    if (posix) assert.equal(fs.statSync(path.join(dir, '.gitignore')).mode & 0o777, 0o640, 'permissions are kept');
+    assert.deepEqual(fs.readdirSync(dir).filter((name) => name.includes('.tmp')), [], 'no temp file is left');
+    const installed = snapshot(space);
+    install(dir);
+    assert.equal(snapshot(space), installed, 'a second run is a no-op');
+  });
+  check('links: a .gitignore that cannot be replaced safely is refused before any adapter file is written', () => {
+    const dir = project();
+    write(dir, '.gitignore', 'node_modules\n');
+    const before = snapshot(dir);
+    const failing = { ...fs, renameSync: (from, to) => { if (to.endsWith('.gitignore')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }); return fs.renameSync(from, to); } };
+    refuses(() => install(dir, { fsImpl: failing }), /Could not replace \.gitignore safely \(EPERM\); it was left unchanged and nothing else was written/);
+    assert.equal(snapshot(dir), before, 'no temp file, no adapter file, .gitignore unchanged');
+    // Edited between planning (first read) and replacing (second read): refused, never merged over the edit.
+    const changed = project();
+    write(changed, '.gitignore', 'node_modules\n');
+    const original = fs.readFileSync;
+    let reads = 0;
+    fs.readFileSync = (file, ...rest) => (String(file).endsWith('.gitignore') && ++reads === 2 ? Buffer.from('edited meanwhile\n') : original.call(fs, file, ...rest));
+    try { refuses(() => install(changed), /\.gitignore changed while Agent Kit was installing; it was left unchanged/); } finally { fs.readFileSync = original; }
+    assert.equal(reads, 2);
+    assert.equal(read(changed, '.gitignore'), 'node_modules\n');
+    assert.ok(!fs.existsSync(path.join(changed, '.claude')) && !fs.existsSync(path.join(changed, 'CLAUDE.md')));
+  });
   if (posix) {
     contained('external .claude/settings.json', (dir) => { fs.mkdirSync(path.join(dir, '.claude')); fs.symlinkSync('../../outside/.claude/settings.json', path.join(dir, '.claude', 'settings.json')); }, /settings\.json is a symbolic link or junction/);
     contained('external .gitignore', (dir) => fs.symlinkSync('../outside/notes.txt', path.join(dir, '.gitignore')), /\.gitignore is a link that leads outside the project/);

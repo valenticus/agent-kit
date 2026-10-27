@@ -2,17 +2,26 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { promisify } from 'node:util';
+import { inspect, promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const relative = 'optional/vendored/security-audit';
 const directory = path.join(root, relative);
 const commit = 'c1c8a8c1471069fb0e188eeaff69b8e8db6564a8';
+// The current check is named in any failure, and the full error (stack, assertion diff, child output) is also saved to
+// a file that is not cleaned up, so an intermittent failure can be diagnosed after the fact. Node still reports it.
+let stage = 'package file set';
+process.on('uncaughtExceptionMonitor', (error) => {
+  const report = `validate-security-audit failed during: ${stage}\n${inspect(error, { depth: 6 })}\n`;
+  const file = path.join(tmpdir(), `agent-kit-security-audit-failure-${process.pid}-${Date.now()}.log`);
+  try { writeFileSync(file, report); console.error(`${report}Full report saved to ${file}`); } catch { console.error(report); }
+});
 const expectedFiles = ['LICENSE', 'SKILL.md', 'UPSTREAM.md', 'agents/openai.yaml', 'references/report-format.md', 'references/source-review.md'].sort();
 async function filesUnder(current, prefix = '') {
   const files = [];
@@ -28,6 +37,7 @@ async function filesUnder(current, prefix = '') {
   return files.sort();
 }
 assert.deepEqual(await filesUnder(directory), expectedFiles, 'text-only package file set changed; review new executable/configuration surfaces');
+stage = 'catalog and provenance';
 const catalog = JSON.parse(await readFile(path.join(root, 'optional/catalog.json'), 'utf8'));
 const module = catalog['security-audit'];
 assert.equal(module.kind, 'vendored');
@@ -39,13 +49,16 @@ assert.equal(module.upstream, 'https://github.com/cloudflare/security-audit-skil
 assert.equal(module.upstreamCommit, commit);
 const upstream = await readFile(path.join(directory, 'UPSTREAM.md'), 'utf8');
 assert.ok(upstream.includes(commit) && upstream.includes(`Adaptation version: \`${module.version}\``), 'provenance disagrees with catalog');
+stage = 'pinned license';
 const license = await readFile(path.join(directory, 'LICENSE'), 'utf8');
 // Pin the exact complete upstream MIT notice, permitting checkout EOL differences.
 const normalizedLicense = license.replaceAll('\r\n', '\n');
 assert.equal(createHash('sha256').update(normalizedLicense).digest('hex'), 'e598e694aa506650c7192d5ea3be0e50aca0d356ea00551c53429f0b01eb6391');
+stage = 'skill metadata and invocation policy';
 const skill = await readFile(path.join(directory, 'SKILL.md'), 'utf8');
 assert.match(skill, /^---\r?\nname: security-audit\r?\ndescription: [^\r\n]+\r?\n---/);
 assert.equal((await readFile(path.join(directory, 'agents/openai.yaml'), 'utf8')).replaceAll('\r\n', '\n'), 'policy:\n  allow_implicit_invocation: false\n', 'implicit invocation must stay disabled, without tools or hooks');
+stage = 'local references';
 for (const relativeFile of expectedFiles.filter((file) => file.endsWith('.md'))) {
   const file = path.join(directory, relativeFile);
   const text = await readFile(file, 'utf8');
@@ -58,6 +71,7 @@ for (const relativeFile of expectedFiles.filter((file) => file.endsWith('.md')))
     assert.ok((await lstat(resolved)).isFile(), `missing reference: ${relativeFile}: ${destination}`);
   }
 }
+stage = 'installer defaults';
 const installer = await readFile(path.join(root, 'scripts/install/install.ps1'), 'utf8');
 const defaultSkills = installer.match(/\[string\[\]\]\$Skills\s*=\s*@\(([^)]*)\)/)?.[1];
 assert.ok(defaultSkills, 'cannot identify default skill selection');
@@ -70,6 +84,7 @@ if (process.argv.includes('--fixtures')) {
   const workspace = await mkdtemp(path.join(tmpdir(), 'agent-kit-security-audit-'));
   const execute = promisify(execFile);
   try {
+    stage = 'fixtures: package copies';
     const shared = path.join(workspace, '.agents/skills/security-audit');
     const mirror = path.join(workspace, '.cline/skills/security-audit');
     await mkdir(path.dirname(shared), { recursive: true });
@@ -82,12 +97,15 @@ if (process.argv.includes('--fixtures')) {
       for (const file of expectedFiles) assert.ok((await readFile(path.join(directory, file))).equals(await readFile(path.join(destination, file))), `fixture copy differs: ${file}`);
     }
     const validate = () => execute(process.execPath, [path.join(root, 'scripts/validation/validate-install.mjs'), workspace]);
+    stage = 'fixtures: validate-install accepts the copies';
     await validate();
+    stage = 'fixtures: validate-install rejects invocation-policy drift';
     // Prove the recursive mirror validator catches policy metadata drift too.
     await writeFile(path.join(mirror, 'agents/openai.yaml'), 'policy:\n  allow_implicit_invocation: true\n');
     await assert.rejects(validate(), (error) => /security-audit.*openai.yaml.*mirrors differ/.test(error.stderr));
     console.log('Validated disposable package copying and complete Cline mirror parity, including rejection of invocation-policy drift. PowerShell installer and native discovery were not exercised by these fixtures.');
   } finally {
+    stage = 'fixtures: cleanup';
     await rm(workspace, { recursive: true, force: true });
   }
 }

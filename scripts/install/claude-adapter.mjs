@@ -90,11 +90,12 @@ function plan(project) {
   if (!['missing', 'correct'].includes(link.state)) {
     refuse(`${link.link} already exists (${link.state}) and is not the Agent Kit link to .agents/skills. Resolve it manually; it is never overwritten.`);
   }
+  const gitignoreText = readIfPresent(path.join(project, '.gitignore'), 'utf8');
   return {
     claudeMd: planClaudeMd(readIfPresent(path.join(project, 'CLAUDE.md'), 'utf8'), template),
     bootstrap: planBootstrapFile(readIfPresent(path.join(project, BOOTSTRAP_RELATIVE)), canonicalBootstrap),
     settings: planSettings(readIfPresent(path.join(claudeDir, 'settings.json'), 'utf8')),
-    gitignore: { ...planGitignore(readIfPresent(path.join(project, '.gitignore'), 'utf8')), file: gitignore.real },
+    gitignore: { ...planGitignore(gitignoreText), file: gitignore.real, existing: gitignoreText },
     canonicalBootstrap,
   };
 }
@@ -103,15 +104,18 @@ export function preflight(projectRoot) {
   plan(path.resolve(projectRoot));
 }
 
-// Replaces settings.json through a uniquely named temp file beside it. The temp file is created exclusively (never
-// replacing another file) and removed only if this call created it, so a failure leaves the original untouched.
-function replaceSettings(target, content, fsImpl) {
+// Replaces a file through a uniquely named temp file beside it. The temp file is created exclusively (never
+// replacing another file) and removed only if this call created it, so a failure leaves the original untouched. The
+// target gets a new inode, so a hard link to it (possibly outside the project) keeps its old content. With `mode`,
+// the original permission bits are kept.
+function replaceFile(target, content, fsImpl, mode) {
   const temp = `${target}.agent-kit-${process.pid}-${Date.now()}.tmp`;
   let created = false;
   try {
     const fd = fsImpl.openSync(temp, 'wx');
     created = true;
     try { fsImpl.writeFileSync(fd, content); } finally { fsImpl.closeSync(fd); }
+    if (mode !== undefined) fsImpl.chmodSync(temp, mode);
     fsImpl.renameSync(temp, target);
     created = false;
   } finally {
@@ -130,16 +134,27 @@ export function install(projectRoot, { fsImpl = fs } = {}) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, { flag });
   };
+  // .gitignore first, so that if it cannot be replaced safely nothing else has been written yet. It is never appended
+  // in place: every existing byte is kept, the Agent Kit lines follow, and the result replaces the real file by rename,
+  // so a hard link to a file outside the project is not changed.
+  if (steps.gitignore.action === 'append') {
+    const file = steps.gitignore.file;
+    const existing = fs.readFileSync(file);
+    if (existing.toString('utf8') !== steps.gitignore.existing) refuse('.gitignore changed while Agent Kit was installing; it was left unchanged. Run the installer again.');
+    try { replaceFile(file, Buffer.concat([existing, Buffer.from(steps.gitignore.content, 'utf8')]), fsImpl, fs.statSync(file).mode & 0o7777); } catch (error) {
+      refuse(`Could not replace .gitignore safely (${error.code ?? error.message}); it was left unchanged and nothing else was written. Add "${GITIGNORE_ENTRY}" to it manually, or fix its permissions, and run the installer again.`);
+    }
+    report.push(`added ${GITIGNORE_ENTRY} to .gitignore`);
+  }
+  if (steps.gitignore.action === 'create') { write('.gitignore', steps.gitignore.content, 'wx'); report.push(`created .gitignore with ${GITIGNORE_ENTRY}`); }
   if (steps.bootstrap.action === 'create') { write(BOOTSTRAP_RELATIVE, steps.canonicalBootstrap); report.push(`created ${BOOTSTRAP_RELATIVE}`); }
   if (steps.settings.action !== 'noop') {
     const target = path.join(project, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    replaceSettings(target, steps.settings.content, fsImpl);
+    replaceFile(target, steps.settings.content, fsImpl);
     report.push(`${steps.settings.action === 'create' ? 'created' : 'merged SessionStart hook into'} .claude/settings.json`);
   }
   if (steps.claudeMd.action === 'create') { write('CLAUDE.md', steps.claudeMd.content, 'wx'); report.push('created CLAUDE.md'); }
-  if (steps.gitignore.action === 'create') { write('.gitignore', steps.gitignore.content, 'wx'); report.push(`created .gitignore with ${GITIGNORE_ENTRY}`); }
-  if (steps.gitignore.action === 'append') { fs.appendFileSync(steps.gitignore.file, steps.gitignore.content); report.push(`added ${GITIGNORE_ENTRY} to .gitignore`); }
   const linked = ensureSkillsLink(project);
   report.push(`${linked.status} .claude/skills link`);
   return report;
